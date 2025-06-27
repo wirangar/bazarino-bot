@@ -1,36 +1,30 @@
-# main.py – Bazarnio Bot (PTB-20, Render Webhook)
-
-import os
-import random
-import datetime
+# main.py  –  Bazarnio Telegram Bot  (PTB-20 + webhook)   Python 3.11
+import os, datetime, random, asyncio
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, ContextTypes,
-    CommandHandler, MessageHandler, ConversationHandler, filters,
+    Application, ApplicationBuilder, ContextTypes,
+    CommandHandler, MessageHandler, ConversationHandler, filters
 )
-
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+# ─────────────── متغیرهای محیطی ────────────────
+TOKEN       = os.environ["TELEGRAM_TOKEN"]
+BASE_URL    = os.environ["BASE_URL"]                 # https://bazarino-bot.onrender.com
+ADMIN_ID    = int(os.environ["ADMIN_CHAT_ID"])
+CREDS_PATH  = os.environ["GOOGLE_CREDS"]             # /etc/secrets/....json
+SHEET_NAME  = "Bazarnio Orders"
 
-# ────── متغیرهای محیطی ──────
-TOKEN           = os.environ["TELEGRAM_TOKEN"]
-ADMIN_CHAT_ID   = int(os.getenv("ADMIN_CHAT_ID", "0"))
-BASE_URL        = os.environ["BASE_URL"]                    # https://bazarino-bot.onrender.com
-CREDS_PATH      = os.environ["GOOGLE_CREDS"]               # ‎/etc/secrets/…‎
-SHEET_NAME      = os.getenv("SHEET_NAME", "Bazarnio Orders")
-PORT            = int(os.getenv("PORT", 10000))
-
-# ────── اتصال به Google Sheets ──────
+# ─────────────── Google Sheets ────────────────
 scope  = ["https://spreadsheets.google.com/feeds",
           "https://www.googleapis.com/auth/drive"]
 creds  = ServiceAccountCredentials.from_json_keyfile_name(CREDS_PATH, scope)
 sheet  = gspread.authorize(creds).open(SHEET_NAME).sheet1
 
-# ────── استیت‌های فرم سفارش ──────
+# ─────────────── استیت‌های فرم سفارش ───────────
 NAME, ADDRESS, PHONE, PRODUCT, QTY, NOTES = range(6)
 
-# ────── شعارها (چرخشی) ──────
+# ─────────────── پیام خوش‌آمد ───────────────
 TAGLINES = [
     "Bazarnio – طعم ایران در قلب پروجا",
     "بازار ایرانی‌ها، همین‌جا!",
@@ -43,60 +37,79 @@ TAGLINES = [
     "Un piccolo Iran, nel cuore d’Italia",
 ]
 
-# ───────── پیام شروع ─────────
-async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    tagline = random.choice(TAGLINES)
-    kb = [["🛍 مشاهده منو"], ["📝 ثبت سفارش"], ["ℹ️ درباره ما", "📞 تماس"]]
-
+async def start(u: Update, _: ContextTypes.DEFAULT_TYPE):
     welcome = (
-        f"🍊 <b>{tagline}</b>\n\n"
-        "خوش آمدی! این‌جا می‌تونی محصولات اصیل ایرانی رو سفارش بدی و درب منزل تحویل بگیری.\n"
-        "برای شروع یکی از گزینه‌ها رو انتخاب کن:"
+        f"🍊 <b>{random.choice(TAGLINES)}</b> 🇮🇷🇮🇹\n\n"
+        "🎉 می‌توانید محصولات ایرانی را ببینید، سفارش بدهید و درب منزل تحویل بگیرید.\n"
+        "برای شروع یکی از گزینه‌ها را انتخاب کنید:"
     )
+    kb = [["🛍 مشاهده منو"],
+          ["📝 ثبت سفارش"],
+          ["ℹ️ درباره‌ ما", "📞 تماس"]]
     await u.message.reply_html(welcome, reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
-# ───────── سایر هندلرها ─────────
-async def about(u, _):    await u.message.reply_text("بازارینو – پلی بین ایران و ایتالیا 🇮🇷🇮🇹")
-async def contact(u, _):  await u.message.reply_text("📞 واتساپ: +39 …\nاینستاگرام: @bazarnio")
-async def menu(u, _):     await u.message.reply_text(
-    "📋 دسته‌بندی محصولات:\n"
-    "🍚 برنج و حبوبات\n🌿 ادویه و خشکبار\n🍬 تنقلات\n🥖 نان و کنسرو\n🧃 نوشیدنی‌ها"
-)
+# ─────────────── صفحات ثابت ────────────────
+async def about(u, _):   await u.message.reply_text("بازارینو – طعم خونه با کیفیت اصیل 🇮🇷🇮🇹")
+async def contact(u, _): await u.message.reply_text("📞 واتساپ: +39 …  |  اینستاگرام: @bazarnio")
+async def menu(u, _):    await u.message.reply_text("🍚 برنج و حبوبات\n🌿 ادویه و خشکبار\n🍬 تنقلات\n🥖 نان و کنسرو\n🧃 نوشیدنی‌ها")
 
-async def start_order(u, _):              await u.message.reply_text("👤 نام و نام خانوادگی:");           return NAME
-async def get_name(u, c):    c.user_data["name"]=u.message.text;     await u.message.reply_text("🏠 آدرس دقیق در پروجا:"); return ADDRESS
-async def get_address(u, c): c.user_data["address"]=u.message.text;  await u.message.reply_text("📞 شماره تماس:");       return PHONE
-async def get_phone(u, c):   c.user_data["phone"]=u.message.text;    await u.message.reply_text("📦 نام محصول:");        return PRODUCT
-async def get_product(u, c): c.user_data["product"]=u.message.text;  await u.message.reply_text("🔢 تعداد:");             return QTY
-async def get_qty(u, c):     c.user_data["quantity"]=u.message.text; await u.message.reply_text("📝 توضیح (یا «ندارم»):"); return NOTES
+# ─────────────── فرم سفارش ────────────────
+async def start_order(u, _):
+    await u.message.reply_text("👤 نام و نام خانوادگی:")
+    return NAME
+
+async def get_name(u, c):
+    c.user_data["name"] = u.message.text
+    await u.message.reply_text("🏠 آدرس دقیق در پروجا:")
+    return ADDRESS
+
+async def get_address(u, c):
+    c.user_data["address"] = u.message.text
+    await u.message.reply_text("📞 شماره تماس:")
+    return PHONE
+
+async def get_phone(u, c):
+    c.user_data["phone"] = u.message.text
+    await u.message.reply_text("📦 نام محصول:")
+    return PRODUCT
+
+async def get_product(u, c):
+    c.user_data["product"] = u.message.text
+    await u.message.reply_text("🔢 تعداد:")
+    return QTY
+
+async def get_qty(u, c):
+    c.user_data["qty"] = u.message.text
+    await u.message.reply_text("📝 توضیح (یا بنویسید «ندارم»):")
+    return NOTES
 
 async def get_notes(u, c):
-    c.user_data["notes"]=u.message.text
+    c.user_data["notes"] = u.message.text
     row = [
-        datetime.datetime.utcnow().isoformat(timespec="seconds"),
-        c.user_data["name"], c.user_data["address"], c.user_data["phone"],
-        c.user_data["product"], c.user_data["quantity"], c.user_data["notes"],
+        datetime.datetime.utcnow().isoformat(sep=" ", timespec="seconds"),
+        *(c.user_data.get(k) for k in ("name", "address", "phone", "product", "qty", "notes")),
         f"@{u.effective_user.username}" if u.effective_user.username else "-"
     ]
-    try: sheet.append_row(row)
-    except Exception as e: print("Google Sheets error:", e)
+    # ذخیره در شیت
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, sheet.append_row, row)
 
-    await u.message.reply_text("✅ سفارش ثبت شد! به‌زودی تماس می‌گیریم.")
+    await u.message.reply_text("✅ سفارش ثبت شد! در اسرع وقت با شما تماس می‌گیریم.")
 
-    if ADMIN_CHAT_ID:
-        admin_msg = (
-            "📥 سفارش جدید:\n\n"
-            f"👤 {row[1]}\n📍 {row[2]}\n📞 {row[3]}\n"
-            f"📦 {row[4]} × {row[5]}\n📝 {row[6]}\n🔗 {row[7]}"
-        )
-        await c.bot.send_message(ADMIN_CHAT_ID, admin_msg)
-
+    admin_msg = (
+        "📥 <b>سفارش جدید</b>\n\n"
+        f"👤 {row[1]}\n📍 {row[2]}\n📞 {row[3]}\n"
+        f"📦 {row[4]} × {row[5]}\n📝 {row[6]}\n🔗 {row[7]}"
+    )
+    await c.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="HTML")
     return ConversationHandler.END
 
-async def cancel(u,_): await u.message.reply_text("⛔️ سفارش لغو شد."); return ConversationHandler.END
+async def cancel(u, _):
+    await u.message.reply_text("⛔️ سفارش لغو شد.")
+    return ConversationHandler.END
 
-# ───────── اجرا با وبهوک ─────────
-def main() -> None:
+# ─────────────── اجرا با وبهوک ────────────────
+def build_app() -> Application:
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -117,14 +130,13 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(order_conv)
+    return app
 
-    app.run_webhook(
+if __name__ == "__main__":
+    build_app().run_webhook(
         listen="0.0.0.0",
-        port=PORT,
+        port=int(os.getenv("PORT", 8080)),
         url_path=TOKEN,
         webhook_url=f"{BASE_URL}/{TOKEN}",
         allowed_updates=Update.ALL_TYPES,
     )
-
-if __name__ == "__main__":
-    main()
