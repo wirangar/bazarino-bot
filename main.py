@@ -99,5 +99,72 @@ return ConversationHandler.END
 
 ========= HELPERS =========
 
-async def save_order(u: Update, ctx: ContextTypes.DEFAULT_TYPE): p = PRODUCTS[ctx.user_data['product_code']] row = [ datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), ctx.user_data['dest'], p['fa'], p['price'], ctx.user_data['name'], ctx.user_data['
+async def save_order(u: Update, ctx: ContextTypes.DEFAULT_TYPE): """Append one order row to Google Sheets and notify admin.""" p = PRODUCTS[ctx.user_data["product_code"]] row = [ datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), ctx.user_data["dest"], p["fa"], p["price"], ctx.user_data["name"], ctx.user_data["address"], ctx.user_data.get("postal", "-"), ctx.user_data["phone"], ctx.user_data["notes"], f"@{u.effective_user.username}" if u.effective_user.username else "-", ] loop = asyncio.get_running_loop() await loop.run_in_executor(None, partial(sheet.append_row, row))
+
+# confirmation to user
+await u.message.reply_text("✅ سفارش ثبت شد!", reply_markup=ReplyKeyboardRemove())
+
+# notify admin
+admin_msg = (
+    "📥 سفارش جدید
+
+" f"🏷 مقصد: {ctx.user_data['dest']} " f"📦 {p['fa']} — €{p['price']} " f"👤 {ctx.user_data['name']} " f"📍 {ctx.user_data['address']} {ctx.user_data.get('postal','')} " f"☎️ {ctx.user_data['phone']} " f"📝 {ctx.user_data['notes']}" ) await ctx.bot.send_message(ADMIN_ID, admin_msg)
+
+========= PAYMENT HANDLERS =========
+
+async def precheckout(update: Update, ctx: ContextTypes.DEFAULT_TYPE): """Answer the pre‑checkout query so Telegram can proceed with payment.""" await update.pre_checkout_query.answer(ok=True)
+
+async def successful_payment(update: Update, ctx: ContextTypes.DEFAULT_TYPE): """Handle successful payment; simply acknowledge the user.""" await update.message.reply_text("💳 پرداخت موفق! سفارش شما در حال پردازش است…") # در نسخه ساده، جزئیات سفارش قبلاً ذخیره شده‌است (در step_notes => save_order)
+
+========= CANCEL =========
+
+async def cancel(u: Update, _): await u.message.reply_text("⛔️ سفارش لغو شد.", reply_markup=ReplyKeyboardRemove()) return ConversationHandler.END
+
+========= COMMANDS =========
+
+async def cmd_start(u: Update, _): await u.message.reply_html(WELCOME, reply_markup=kb_main(), disable_web_page_preview=True)
+
+aasync def cmd_about(u: Update, _): await u.message.reply_html(ABOUT)
+
+async def cmd_privacy(u: Update, _): await u.message.reply_html(PRIVACY)
+
+========= MAIN =========
+
+def main() -> None: logging.basicConfig(level=logging.INFO) app = ApplicationBuilder().token(TOKEN).build()
+
+# command handlers
+app.add_handler(CommandHandler("start", cmd_start))
+app.add_handler(CommandHandler("about", cmd_about))
+app.add_handler(CommandHandler("privacy", cmd_privacy))
+
+# callback router
+app.add_handler(CallbackQueryHandler(router))
+
+# payment
+app.add_handler(PreCheckoutQueryHandler(precheckout))
+app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+
+# conversation for order form
+conv = ConversationHandler(
+    entry_points=[CallbackQueryHandler(router, pattern="^ord[PI]_")],
+    states={
+        NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_name)],
+        ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_address)],
+        POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_postal)],
+        PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_phone)],
+        NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_notes)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+app.add_handler(conv)
+
+# webhook
+app.run_webhook(
+    listen="0.0.0.0",
+    port=int(os.getenv("PORT", "8080")),
+    url_path=TOKEN,
+    webhook_url=f"{BASE_URL}/{TOKEN}",
+)
+
+if name == "main": main()
 
