@@ -1,222 +1,209 @@
-# main.py – Bazarnio Bot  (Python-Telegram-Bot 20.x)   Python 3.11
-import os, json, datetime, asyncio, random, tempfile
+# main.py – Bazarnio Telegram Bot (Render-ready)
+# Python 3.11 – python-telegram-bot 20.x
+# -------------------------------------------------
+"""
+ویژگی‌های کلیدی
+--------------
+• می‌خوانَد از GOOGLE_CREDS (بدون خطای CREDS_PATH)
+• پیام‌های دوزبانه (فارسی 🇮🇷 + ایتالیایی 🇮🇹)
+• منوی نمایشی دو-سطحی (دسته → لیست کالا)
+• ثبت سفارش در Google Sheets + اعلان به مدیر
+• سازگار با Render (وبهوک روی پورت 8080)
+"""
+
+import os, datetime, asyncio, random
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder, Application, ContextTypes,
-    CommandHandler, MessageHandler, ConversationHandler, filters
+    CommandHandler, MessageHandler, ConversationHandler, filters,
 )
-
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# ────────────── ENV ──────────────
+
+# ─────────────── ENV ───────────────
 TOKEN      = os.environ["TELEGRAM_TOKEN"]
-BASE_URL   = os.environ["BASE_URL"]                 # e.g. https://bazarino-bot.onrender.com
+BASE_URL   = os.environ["BASE_URL"]                # ex: https://bazarino-bot.onrender.com
 ADMIN_ID   = int(os.environ["ADMIN_CHAT_ID"])
-CREDS_PATH = os.environ["CREDS_PATH"]               # /etc/secrets/creds.json
+CREDS_PATH = os.environ["GOOGLE_CREDS"]            # secret-file path in Render
 SHEET_NAME = "Bazarnio Orders"
 
-# ────────────── Google Sheets ──────────────
+
+# ─────────────── Google Sheets ───────────────
 scope = ["https://spreadsheets.google.com/feeds",
          "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_PATH, scope)
 sheet = gspread.authorize(creds).open(SHEET_NAME).sheet1
 
-# ────────────── States ──────────────
-(DELIVERY_ZONE, NAME, ADDRESS, ZIP, PHONE,
- PRODUCT, QTY, NOTES) = range(8)
-(MainMenu, CatChoice, SubChoice) = range(8, 11)   # برای منو
 
-# ────────────── ثابت‌ها ──────────────
+# ─────────────── Conversation states ───────────────
+NAME, ADDRESS, PHONE, PRODUCT, QTY, NOTES = range(6)
+
+
+# ─────────────── ثابت‌های متنی (FA | IT) ───────────────
 TAGLINES = [
     "Bazarnio – طعم ایران در قلب پروجا",
-    "Everyday Persia. Delivered.",
     "بازار ایرانی‌ها، همین‌جا!",
-    "Un piccolo Iran, nel cuore d’Italia",
+    "Everyday Persia. Delivered.",
+    "طعم خونه، با یک کلیک",
 ]
 
-MAIN_KB = [["🛍 منو / Menu"], ["📝 سفارش / Ordina"], ["ℹ️ درباره / Info", "📞 تماس / Contatto"]]
+ABOUT_TXT = (
+    "بازارینو – طعم اصیل ایران، در قلب ایتالیا 🇮🇷🇮🇹\n"
+    "Bazarino – Il gusto autentico dell’Iran, nel cuore dell’Italia 🇮🇹🇮🇷"
+)
 
+CONTACT_TXT = (
+    "📞 واتساپ: +39 …  |  اینستاگرام: @bazarino\n"
+    "WhatsApp: +39 …  |  Instagram: @bazarino"
+)
+
+# فقط برای نمایش لیست دسته‌ها – سفارش همچنان دستی است
 CATEGORIES = {
-    "برنج / Riso": ["هاشمی", "طارم", "دودی", "↩️ بازگشت"],
-    "حبوبات / Legumi": ["لوبیا", "عدس", "نخود", "↩️ بازگشت"],
-    "ادویه / Spezie": ["زعفران", "زرچوبه", "زیره", "↩️ بازگشت"],
-    "خشکبار / Frutta secca": ["پسته", "بادام", "کشمش", "↩️ بازگشت"],
-    "نوشیدنی / Bevande": ["دلستر", "دوغ", "↩️ بازگشت"],
+    "🍚 برنج":      ["برنج هاشمی", "برنج طارم", "برنج دودی"],
+    "🌿 ادویه":     ["زعفران", "زردچوبه", "دارچین"],
+    "🍬 تنقلات":    ["گز", "سوهان", "پسته شور"],
+    "🥖 نان":       ["نان بربری", "نان لواش"],
+    "🧃 نوشیدنی":   ["دوغ", "دلستر", "شربت زعفران"],
 }
 
-# ────────────── Handlers ──────────────
-async def start(u: Update, _):
-    welcome = (
-        f"🍊 <b>{random.choice(TAGLINES)}</b> 🇮🇷🇮🇹\n"
-        "🛍 فروشگاه آنلاین محصولات ایرانی در پروجا – تحویل سریع درب منزل.\n\n"
-        "👇 یکی از گزینه‌ها را انتخاب کنید:"
+
+# ─────────────── Handlers ───────────────
+async def start(update: Update, _):
+    tag = random.choice(TAGLINES)
+    msg = (
+        "🍇 <b>به بازارینو خوش آمدید!</b> 🇮🇷🇮🇹\n"
+        "Benvenuto/a su <b>Bazarino</b>! 🇮🇹🇮🇷\n\n"
+        "🏠 فروشگاه آنلاین محصولات ایرانی در پروجا\n"
+        "Negozio online di prodotti persiani a Perugia\n\n"
+        "📦 ارسال سریع | پرداخت هنگام تحویل\n"
+        "Consegna veloce | Pagamento alla consegna\n\n"
+        f"<i>{tag}</i>\n\n"
+        "👇 یکی از گزینه‌ها / Scegli un’opzione:"
     )
-    await u.message.reply_html(welcome, reply_markup=ReplyKeyboardMarkup(MAIN_KB, resize_keyboard=True))
+    kb = [
+        ["🛍 منو / Menu"],
+        ["📝 ثبت سفارش / Ordina"],
+        ["ℹ️ درباره‌ ما / Info", "📞 تماس / Contatto"],
+    ]
+    await update.message.reply_html(msg, reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
-async def about(u: Update, _):
-    txt = (
-        "⚡️ ما چند دانشجوی ایرانی در پروجا هستیم که مزهٔ خونه را به شما می‌رسانیم؛ "
-        "کیفیت اصیل، قیمت منصفانه و تحویل سریع!\n\n"
-        "Giovani studenti persiani a Perugia che portano i sapori di casa direttamente a te. "
-        "Qualità autentica, prezzi onesti e consegna rapida!"
+
+async def about(update: Update, _):
+    await update.message.reply_text(ABOUT_TXT)
+
+
+async def contact(update: Update, _):
+    await update.message.reply_text(CONTACT_TXT)
+
+
+# منوی دسته‌ها (فقط نمایش)
+async def menu_handler(update: Update, _):
+    fa_lines = "\n".join(CATEGORIES.keys())
+    it_lines = "\n".join([k.split()[1] for k in CATEGORIES])
+    await update.message.reply_text(
+        f"{fa_lines}\n\n{it_lines}\n\n"
+        "برای سفارش / Per ordinare → دکمهٔ «📝»"
     )
-    await u.message.reply_text(txt)
 
-async def contact(u: Update, _):
-    await u.message.reply_text("📞 WhatsApp: +39 …  |  Instagram: @bazarino")
 
-# ────────────── ① منوی دسته‌ها و زیرمنو ──────────────
-async def menu_entry(u: Update, _):
-    cats = [[k] for k in CATEGORIES]
-    cats.append(["↩️ بازگشت / Back"])
-    await u.message.reply_text("🍱 دسته را انتخاب کنید:", reply_markup=ReplyKeyboardMarkup(cats, resize_keyboard=True))
-    return CatChoice
-
-async def category_chosen(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    choice = u.message.text
-    if choice.startswith("↩️"):
-        await u.message.reply_text("بازگشت به منوی اصلی.", reply_markup=ReplyKeyboardMarkup(MAIN_KB, resize_keyboard=True))
-        return ConversationHandler.END
-
-    if choice in CATEGORIES:
-        c.user_data["category"] = choice
-        items = [[i] for i in CATEGORIES[choice]]
-        await u.message.reply_text("🛒 محصول را انتخاب کنید:", reply_markup=ReplyKeyboardMarkup(items, resize_keyboard=True))
-        return SubChoice
-    await u.message.reply_text("گزینه نامعتبر؛ دوباره انتخاب کنید.")
-    return CatChoice
-
-async def product_from_menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    item = u.message.text
-    if item.startswith("↩️"):
-        return await menu_entry(u, c)
-    c.user_data["product"] = item
-    await u.message.reply_text("🔢 تعداد:", reply_markup=ReplyKeyboardRemove())
-    return QTY
-
-# ────────────── ② فرم سفارش ──────────────
-async def order_entry(u: Update, _):
-    kb = [["📍 داخل پروجا", "🚚 سایر شهرها"]]
-    await u.message.reply_text("محل تحویل را انتخاب کنید:", reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
-    return DELIVERY_ZONE
-
-async def zone_chosen(u, c):
-    c.user_data["zone"] = u.message.text
-    await u.message.reply_text("👤 نام و نام خانوادگی:", reply_markup=ReplyKeyboardRemove())
+# ─────────────── Order flow ───────────────
+async def start_order(update: Update, _):
+    await update.message.reply_text("👤 نام و نام خانوادگی / Nome e cognome:")
     return NAME
 
-async def get_name(u, c):
-    c.user_data["name"] = u.message.text
-    await u.message.reply_text("🏠 آدرس کامل:")
+
+async def get_name(update, context):
+    context.user_data["name"] = update.message.text
+    await update.message.reply_text("🏠 آدرس کامل / Indirizzo:")
     return ADDRESS
 
-async def get_address(u, c):
-    c.user_data["address"] = u.message.text
-    if c.user_data["zone"].startswith("🚚"):
-        await u.message.reply_text("🔢 کد پستی (CAP):")
-        return ZIP
-    await u.message.reply_text("📞 شماره تماس:")
+
+async def get_address(update, context):
+    context.user_data["address"] = update.message.text
+    await update.message.reply_text("📞 شماره تماس / Telefono:")
     return PHONE
 
-async def get_zip(u, c):
-    c.user_data["zip"] = u.message.text
-    await u.message.reply_text("📞 شماره تماس:")
-    return PHONE
 
-async def get_phone(u, c):
-    c.user_data["phone"] = u.message.text
-    await u.message.reply_text("🛒 نام محصول یا «/menu» برای لیست:")
+async def get_phone(update, context):
+    context.user_data["phone"] = update.message.text
+    await update.message.reply_text("📦 نام محصول / Prodotto:")
     return PRODUCT
 
-async def direct_product(u, c):
-    c.user_data["product"] = u.message.text
-    await u.message.reply_text("🔢 تعداد:")
+
+async def get_product(update, context):
+    context.user_data["product"] = update.message.text
+    await update.message.reply_text("🔢 تعداد / Quantità:")
     return QTY
 
-async def qty_receive(u, c):
-    c.user_data["qty"] = u.message.text
-    await u.message.reply_text("📝 توضیح (یا «ندارم»):")
+
+async def get_qty(update, context):
+    context.user_data["qty"] = update.message.text
+    await update.message.reply_text("📝 توضیح (یا «ندارم») / Note (o 'nessuna'):")
     return NOTES
 
-async def finish_order(u, c):
-    c.user_data["notes"] = u.message.text
-    user = u.effective_user
+
+async def get_notes(update, context):
+    context.user_data["notes"] = update.message.text
+
+    # ذخیره در Sheet
     row = [
         datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        c.user_data.get("zone"),
-        c.user_data.get("name"),
-        c.user_data.get("address"),
-        c.user_data.get("zip", "-"),
-        c.user_data.get("phone"),
-        c.user_data.get("product"),
-        c.user_data.get("qty"),
-        c.user_data.get("notes"),
-        f"@{user.username}" if user.username else "-",
+        context.user_data["name"],
+        context.user_data["address"],
+        context.user_data["phone"],
+        context.user_data["product"],
+        context.user_data["qty"],
+        context.user_data["notes"],
+        f"@{update.effective_user.username}" if update.effective_user.username else "-",
     ]
     await asyncio.get_running_loop().run_in_executor(None, sheet.append_row, row)
-    order_id = sheet.row_count
-    await u.message.reply_text(f"✅ سفارش شما ثبت شد!\nکد سفارش: #{order_id}")
 
+    await update.message.reply_text("✅ سفارش ثبت شد! / Ordine ricevuto! Grazie.")
+
+    # اعلان مدیر
     admin_msg = (
-        f"📥 <b>سفارش #{order_id}</b>\n\n"
-        f"{row[2]}  |  {row[5]}\n"
-        f"{row[3]} ({row[4]})\n"
-        f"📦 {row[6]} × {row[7]}\n"
-        f"📝 {row[8]}\n{row[9]}"
+        "📥 <b>سفارش جدید / Nuovo ordine</b>\n\n"
+        f"👤 {row[1]}\n📍 {row[2]}\n📞 {row[3]}\n"
+        f"📦 {row[4]} × {row[5]}\n📝 {row[6]}\n🔗 {row[7]}"
     )
-    try:
-        await c.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="HTML")
-    except Exception as e:
-        print("Admin notify failed:", e)
+    await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, parse_mode="HTML")
     return ConversationHandler.END
 
-async def cancel(u, _):
-    await u.message.reply_text("⛔️ سفارش لغو شد.", reply_markup=ReplyKeyboardMarkup(MAIN_KB, resize_keyboard=True))
+
+async def cancel(update, _):
+    await update.message.reply_text(
+        "⛔️ سفارش لغو شد / Operazione annullata",
+        reply_markup=ReplyKeyboardRemove(),
+    )
     return ConversationHandler.END
 
-# ────────────── Build App ──────────────
+
+# ─────────────── Build & Run ───────────────
 def build_app() -> Application:
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Regex("^🛍"), menu_handler))
     app.add_handler(MessageHandler(filters.Regex("^ℹ"), about))
     app.add_handler(MessageHandler(filters.Regex("^📞"), contact))
 
-    # منو و زیرمنو
-    menu_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^🛍"), menu_entry)],
-        states={
-            CatChoice: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_chosen)],
-            SubChoice: [MessageHandler(filters.TEXT & ~filters.COMMAND, product_from_menu)],
-            QTY:       [MessageHandler(filters.TEXT & ~filters.COMMAND, qty_receive)],
-            NOTES:     [MessageHandler(filters.TEXT & ~filters.COMMAND, finish_order)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        map_to_parent={ConversationHandler.END: ConversationHandler.END},
-    )
-    app.add_handler(menu_conv)
-
-    # سفارش مستقیم
     order_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^📝"), order_entry)],
+        entry_points=[MessageHandler(filters.Regex("^📝"), start_order)],
         states={
-            DELIVERY_ZONE: [MessageHandler(filters.TEXT, zone_chosen)],
-            NAME:          [MessageHandler(filters.TEXT, get_name)],
-            ADDRESS:       [MessageHandler(filters.TEXT, get_address)],
-            ZIP:           [MessageHandler(filters.TEXT, get_zip)],
-            PHONE:         [MessageHandler(filters.TEXT, get_phone)],
-            PRODUCT:       [MessageHandler(filters.TEXT & ~filters.COMMAND, direct_product)],
-            QTY:           [MessageHandler(filters.TEXT & ~filters.COMMAND, qty_receive)],
-            NOTES:         [MessageHandler(filters.TEXT & ~filters.COMMAND, finish_order)],
+            NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            ADDRESS:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_address)],
+            PHONE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
+            PRODUCT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_product)],
+            QTY:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_qty)],
+            NOTES:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_notes)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(order_conv)
-
     return app
 
-# ────────────── Webhook for Render ──────────────
+
 if __name__ == "__main__":
     build_app().run_webhook(
         listen="0.0.0.0",
