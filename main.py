@@ -12,7 +12,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 TOKEN       = os.environ["TELEGRAM_TOKEN"]
 BASE_URL    = os.environ["BASE_URL"]                 # Example: https://bazarino-bot.onrender.com
 ADMIN_ID    = int(os.environ["ADMIN_CHAT_ID"])
-CREDS_PATH  = os.environ["CREDS_PATH"]               # Example: /etc/secrets/creds.json
+CREDS_PATH = os.environ["GOOGLE_CREDS"]
+               # Example: /etc/secrets/creds.json
 SHEET_NAME  = "Bazarnio Orders"
 
 # ─────────────── GOOGLE SHEETS INIT ───────────────
