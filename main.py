@@ -1,103 +1,68 @@
-# main.py – Bazarnio Bot (PTB-20  +  run_webhook روی Render/Cloud Run)
-import os, datetime
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ConversationHandler, ContextTypes, filters,
-)
+import os
+import json
+import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
-# ─────────────── متغیرهای محیطی ───────────────
-TOKEN       = os.environ["TELEGRAM_TOKEN"]
-ADMIN_ID    = int(os.getenv("ADMIN_CHAT_ID", "0"))
-SHEET_NAME  = os.getenv("SHEET_NAME", "Bazarnio Orders")
-PORT        = int(os.environ.get("PORT", 8080))
-BASE_URL    = os.environ.get("BASE_URL", "")     # بعد از Deploy مقداردهی می‌شود
+# ───── تنظیمات پایه و لاگ‌ها ─────
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# ─────────────── Google Sheets ───────────────
-scope = ["https://spreadsheets.google.com/feeds",
-         "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+# ───── محیط ─────
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+SHEET_NAME = "Bazarnio Orders"  # ← اسم Google Sheet شما
+
+# ───── Google Sheets ─────
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
+
+creds = ServiceAccountCredentials.from_json_keyfile_name(
+    "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json",  # ← دقیقاً اسم Secret File
+    scope,
+)
 sheet = gspread.authorize(creds).open(SHEET_NAME).sheet1
 
-# ───── وضعیت‌های فرم ─────
-NAME, ADDRESS, PHONE, PRODUCT, QTY, NOTES = range(6)
 
-# ─────────────── هندلرهای بات ───────────────
-async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    kb = [["🛍 مشاهده منو"], ["📝 ثبت سفارش"],
-          ["ℹ️ درباره ما", "📞 تماس"]]
-    await u.message.reply_html(
-        "🍊 خوش آمدی به <b>Bazarnio</b> – طعم ایران در قلب پروجا 🇮🇷🇮🇹\n\n"
-        "🎉 برای شروع یکی از گزینه‌ها را انتخاب کن:",
-        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+# ───── دستور /start ─────
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await update.message.reply_text(
+        f"سلام {user.first_name} 👋\n"
+        f"به ربات خرید محصولات ایرانی در پروجا خوش اومدی!\n"
+        f"برای ثبت سفارش، لطفاً محصول مورد نظرت رو تایپ کن."
     )
 
-async def about(u, _):   await u.message.reply_text("بازارینو – طعم خونه 🇮🇷🇮🇹")
-async def contact(u, _): await u.message.reply_text("📞 واتساپ: +39 …\nIG: @bazarnio")
-async def menu(u, _):    await u.message.reply_text("🍚 برنج\n🌿 ادویه\n🍬 تنقلات …")
 
-# --- فرم سفارش ---
-async def start_order(u,_):               await u.message.reply_text("👤 نام:");         return NAME
-async def get_name(u,c):    c.user_data["name"]=u.message.text;    await u.message.reply_text("🏠 آدرس:");   return ADDRESS
-async def get_addr(u,c):    c.user_data["address"]=u.message.text; await u.message.reply_text("📞 تلفن:");    return PHONE
-async def get_phone(u,c):   c.user_data["phone"]=u.message.text;   await u.message.reply_text("📦 محصول:");   return PRODUCT
-async def get_prod(u,c):    c.user_data["product"]=u.message.text; await u.message.reply_text("🔢 تعداد:");    return QTY
-async def get_qty(u,c):     c.user_data["qty"]=u.message.text;     await u.message.reply_text("📝 توضیح:");    return NOTES
+# ───── دستور /order ─────
+async def order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    msg = " ".join(context.args)
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-async def get_notes(u, c):
-    c.user_data["notes"] = u.message.text
+    if not msg:
+        await update.message.reply_text("❗ لطفاً بعد از /order متن سفارشت رو بنویس.")
+        return
 
-    # ✔️ اینجا خطا داشت؛ لیست ترکیبی را درست جمع می‌کنیم
-    row = [str(datetime.datetime.utcnow())] + [
-        c.user_data[k] for k in ("name", "address", "phone",
-                                 "product", "qty", "notes")
-    ]
-    row.append(f"@{u.effective_user.username}" if u.effective_user.username else "-")
-    sheet.append_row(row)
+    # ذخیره در Google Sheets
+    sheet.append_row([timestamp, user.username, user.id, msg])
 
-    await u.message.reply_text("✅ سفارش ثبت شد! به‌زودی تماس می‌گیریم.")
-    if ADMIN_ID:
-        await c.bot.send_message(ADMIN_ID,
-            "📥 سفارش جدید:\n" +
-            f"👤 {row[1]}\n📍 {row[2]}\n📞 {row[3]}\n"
-            f"📦 {row[4]} × {row[5]}\n📝 {row[6]}"
-        )
-    return ConversationHandler.END
+    await update.message.reply_text("✅ سفارشت ثبت شد. به زودی باهات تماس می‌گیریم.")
+    await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"🛒 سفارش جدید:\n{msg}")
 
-async def cancel(u,_):
-    await u.message.reply_text("⛔️ سفارش لغو شد.")
-    return ConversationHandler.END
 
-# ─────────────── ساخت اپ و اجرای وبهوک ───────────────
-def build_app():
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex("^🛍"), menu))
-    app.add_handler(MessageHandler(filters.Regex("^ℹ"), about))
-    app.add_handler(MessageHandler(filters.Regex("^📞"), contact))
-
-    conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^📝"), start_order)],
-        states={
-            NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            ADDRESS:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_addr)],
-            PHONE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
-            PRODUCT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prod)],
-            QTY:      [MessageHandler(filters.TEXT & ~filters.COMMAND, get_qty)],
-            NOTES:    [MessageHandler(filters.TEXT & ~filters.COMMAND, get_notes)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    app.add_handler(conv)
-    return app
-
+# ───── اجرا ─────
 if __name__ == "__main__":
-    build_app().run_webhook(
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("order", order))
+    app.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=f"{BASE_URL}/{TOKEN}",
+        port=int(os.environ.get("PORT", 10000)),
+        webhook_url=f"https://bazarino-bot.onrender.com/{TELEGRAM_TOKEN}"
     )
