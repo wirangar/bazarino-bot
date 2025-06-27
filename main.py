@@ -1,148 +1,155 @@
-# main.py – Bazarino Telegram Bot  (PTB-20)  Python 3.11
+# main.py – Bazarino Telegram Bot (python‑telegram‑bot v20)  Python 3.11
 """
-نسخهٔ کامل با ویژگی‌های:
-• منوی دو سطحی (دسته → کالا) + توضیح، تصویر و دکمهٔ سفارش (پروجا / بقیهٔ ایتالیا)
-• فرم سفارش کامل (نام، آدرس، CAP اگر خارج پروجا، تلفن، یادداشت) + پیام خلاصه به کاربر و مدیر
-• منوی همیشگی Bot Commands
-• گوگل‌شیت + متغیّر محیطی GOOGLE_CREDS
-• دو زبانه فارسی 🇮🇷 / ایتالیایی 🇮🇹
+نسخهٔ تکمیل‌‎شده مطابق درخواست نهایی
+────────────────────────────────────────
+● منوی اصلی → دسته‌ ها → کالا ها (عکس + توضیح + وزن + قیمت)
+● دکمه‌های «🛒 سفارش پروجا» و «📦 سفارش ایتالیا» در صفحهٔ کالا
+● فرم سفارش کامل (نام، آدرس، CAP اگر لازم، تلفن، یادداشت)
+● خلاصهٔ سفارش برای کاربر و مدیر + ذخیره در Google Sheets
+●_COMMAND Menu همیشگی: /start (menu) /about /privacy
+● دو زبانهٔ کامل فارسی 🇮🇷 و ایتالیایی 🇮🇹
+● استفاده از متغیّر محیطی GOOGLE_CREDS (بدون ارور)
 """
-import os, datetime, asyncio, logging
+import os, datetime, asyncio, logging, textwrap
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove,
-    BotCommand, InputMediaPhoto
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    BotCommand, InputMediaPhoto, ReplyKeyboardRemove
 )
 from telegram.ext import (
     ApplicationBuilder, Application, ContextTypes,
     CommandHandler, CallbackQueryHandler, ConversationHandler,
-    MessageHandler, filters,
+    MessageHandler, filters
 )
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+# ─────────────── تنظیمات محیط ───────────────
 TOKEN       = os.environ["TELEGRAM_TOKEN"]
-BASE_URL    = os.environ["BASE_URL"]
+BASE_URL    = os.environ["BASE_URL"]            # ‎https://bazarino-bot.onrender.com
 ADMIN_ID    = int(os.environ["ADMIN_CHAT_ID"])
-CREDS_PATH  = os.environ["GOOGLE_CREDS"]
+CREDS_PATH  = os.environ["GOOGLE_CREDS"]        # ‎/etc/secrets/…json
 SHEET_NAME  = "Bazarnio Orders"
 
+# ─────────────── Google Sheets ───────────────
 scope  = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds  = ServiceAccountCredentials.from_json_keyfile_name(CREDS_PATH, scope)
 sheet  = gspread.authorize(creds).open(SHEET_NAME).sheet1
 
-# ───── states
+# ─────────────── فرم سفارش ───────────────
 NAME, ADDRESS, POSTAL, PHONE, NOTES = range(5)
 
-# ───── product data (code ➜ dict)
+# ─────────────── دیتای کالاها ───────────────
 PRODUCTS = {
-    "rice_hashemi": {
-        "label": "برنج هاشمی / Riso Hashemi",
-        "desc":  "برنج ممتاز گیلان، عطر بالا • Riso aromatico della Gilan",
-        "weight": "10 kg",
-        "price":  "€38",
-        "img":    "https://i.imgur.com/6k2nqf8.jpg",
-    },
-    "rice_tarem": {
-        "label": "برنج طارم / Riso Tarom",
-        "desc":  "محصول مازندران، قدبلند • Chicchi lunghi, Mazandaran",
-        "weight": "10 kg", "price": "€34", "img": "https://i.imgur.com/7hX5z1C.jpg",
-    },
-    "bean_lentil": {"label": "عدس / Lenticchie", "desc": "عدس سبز ایرانی", "weight": "1 kg", "price": "€4", "img": "https://i.imgur.com/IbWhVtI.jpg"},
-    # … بقیهٔ محصولات مشابه
+    "rice_hashemi": dict(
+        label="برنج هاشمی / Riso Hashemi",
+        desc ="برنج ممتاز گیلان، عطر زیاد • Riso aromatico della Gilan",
+        weight="10 kg", price="€38", img="https://i.imgur.com/6k2nqf8.jpg"),
+    "rice_tarem": dict(
+        label="برنج طارم / Riso Tarom",
+        desc ="قد بلند مازندران • Chicchi lunghi, Mazandaran",
+        weight="10 kg", price="€34", img="https://i.imgur.com/7hX5z1C.jpg"),
+    "rice_smoke": dict(
+        label="برنج دودی / Riso Affumicato",
+        desc ="دودی سنتی • Affumicatura tradizionale",
+        weight="10 kg", price="€40", img="https://i.imgur.com/2Slx1Ab.jpg"),
+    "bean_lentil": dict(label="عدس / Lenticchie", desc="عدس سبز ایرانی", weight="1 kg", price="€4", img="https://i.imgur.com/IbWhVtI.jpg"),
+    "bean_lobio": dict(label="لوبیا / Fagioli",   desc="لوبیای قرمز", weight="1 kg", price="€4", img="https://i.imgur.com/P5B2aOQ.jpg"),
+    "bean_chick": dict(label="نخود / Ceci",        desc="نخود درشت کرمانشاه", weight="1 kg", price="€4", img="https://i.imgur.com/8a4hPH2.jpg"),
+    # … بقیهٔ محصولات را می‌توان مانند بالا افزود
 }
 
 CATEGORIES = {
-    "rice":  ("🍚 برنج و غلات / Riso & Cereali", ["rice_hashemi", "rice_tarem"]),
-    "beans": ("🥣 حبوبات / Legumi",             ["bean_lentil"]),
-    # ادامهٔ دسته‌ها مطابق قبلی
+    "rice":  ("🍚 برنج و غلات / Riso & Cereali",  ["rice_hashemi", "rice_tarem", "rice_smoke"]),
+    "beans": ("🥣 حبوبات / Legumi",               ["bean_lentil", "bean_lobio", "bean_chick"]),
+    # spice / nuts / drink / canned به‌دلخواه همانند بالا اضافه شود
 }
 
-# ───── keyboards
+# ─────────────── پیام‌های ثابت ───────────────
+WELCOME = textwrap.dedent("""
+    🍇 <b>به بازارینو خوش آمدید!</b> 🇮🇷🇮🇹
+    Benvenuto in <b>Bazarino</b>!
 
-def main_menu():
+    🏠 فروشگاه آنلاین محصولات ایرانی در پروجا – طعم اصیل ایران هر روز!
+    Il mini‑market persiano nel cuore di Perugia.
+
+    👇 دسته‌بندی را انتخاب کنید / Scegli una categoria:
+""")
+ABOUT = "بازارینو – طعم خانه در قلب ایتالیا 🇮🇷🇮🇹\nBazarino – Sapori persiani a Perugia"
+
+# ─────────────── ساخت کیبوردها ───────────────
+
+def kb_main() -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(title, callback_data=f"cat_{key}")] for key, (title, _) in CATEGORIES.items()]
     rows.append([InlineKeyboardButton("ℹ️ درباره ما / Info", callback_data="about")])
     rows.append([InlineKeyboardButton("📞 پشتیبانی / Support", url="https://t.me/BazarinoSupport")])
     return InlineKeyboardMarkup(rows)
 
-def items_kb(cat_key):
-    codes = CATEGORIES[cat_key][1]
-    rows = [
-        [InlineKeyboardButton(PRODUCTS[c]["label"], callback_data=f"prd_{c}")]
-        for c in codes
-    ]
-    rows.append([InlineKeyboardButton("⬅️ بازگشت / Indietro", callback_data="back_main")])
-    return InlineKeyboardMarkup(rows)
+def kb_items(cat_key: str) -> InlineKeyboardMarkup:
+    buttons = [[InlineKeyboardButton(PRODUCTS[c]["label"], callback_data=f"prd_{c}")]
+               for c in CATEGORIES[cat_key][1]]
+    buttons.append([InlineKeyboardButton("⬅️ بازگشت / Indietro", callback_data="back_main")])
+    return InlineKeyboardMarkup(buttons)
 
-def order_kb(code):
+def kb_buy(code: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒 سفارش پروجا / Ordina a Perugia", callback_data=f"ordP_{code}")],
-        [InlineKeyboardButton("📦 سفارش ایتالیا / Ordina in Italia",  callback_data=f"ordI_{code}")],
+        [InlineKeyboardButton("🛒 سفارش پروجا / Ordina a Perugia", callback_data=f"buyP_{code}")],
+        [InlineKeyboardButton("📦 سفارش ایتالیا / Ordina in Italia",  callback_data=f"buyI_{code}")],
         [InlineKeyboardButton("⬅️ بازگشت / Indietro", callback_data="back_cat")],
     ])
 
-# ───── command menu once
-BOT_CMDS = [
-    BotCommand("start", "منو / Menu"),
-    BotCommand("privacy", "سیاست حریم خصوصی / Privacy"),
-]
+# ─────────────── handlers ───────────────
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.set_my_commands([
+        BotCommand("start", "منو / Menu"),
+        BotCommand("about", "درباره ما / Info"),
+        BotCommand("privacy", "حریم خصوصی / Privacy"),
+    ])
+    await update.message.reply_html(WELCOME, reply_markup=kb_main())
 
-# ───── handlers
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.set_my_commands(BOT_CMDS)
-    text = (
-        "🍇 <b>به بازارینو خوش آمدید!</b> / Benvenuto su <b>Bazarino</b>!\n"
-        "🇮🇷 طعم خانه در 🇮🇹 ایتالیا\n\n"
-        "👇 دسته‌بندی را انتخاب کنید / Scegli una categoria:"
-    )
-    if update.message:
-        await update.message.reply_html(text, reply_markup=main_menu())
-    else:
-        await update.callback_query.edit_message_text(text, reply_markup=main_menu(), parse_mode="HTML")
-
-async def menu_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cb_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    data = q.data
+    d = q.data
 
-    if data == "about":
-        await q.edit_message_text("بازارینو – فروشگاه ایرانیان پروجا 🇮🇷🇮🇹\nBazarino – Emporio persiano a Perugia")
-        return
-    if data == "back_main":
-        await start(update, context); return
+    if d == "about":
+        await q.answer(); await q.message.reply_html(ABOUT); return
+    if d == "back_main":
+        await q.edit_message_text("↩️", reply_markup=kb_main()); return
 
-    if data.startswith("cat_"):
-        key = data[4:]
-        await q.edit_message_text(CATEGORIES[key][0], reply_markup=items_kb(key))
+    # نمایش کالاهای دسته
+    if d.startswith("cat_"):
+        key = d[4:]
+        await q.edit_message_text(CATEGORIES[key][0], reply_markup=kb_items(key))
         context.user_data["cat"] = key
         return
 
-    if data == "back_cat":
+    if d == "back_cat":
         key = context.user_data.get("cat")
-        await q.edit_message_text(CATEGORIES[key][0], reply_markup=items_kb(key)); return
+        await q.edit_message_text(CATEGORIES[key][0], reply_markup=kb_items(key)); return
 
-    if data.startswith("prd_"):
-        code = data[4:]
+    # صفحهٔ کالا
+    if d.startswith("prd_"):
+        code = d[4:]
         p = PRODUCTS[code]
         cap = f"<b>{p['label']}</b>\n{p['desc']}\nوزن/Peso: {p['weight']}\n💶 قیمت/Prezzo: {p['price']}"
         await q.message.delete()
-        await context.bot.send_photo(q.message.chat_id, p["img"], caption=cap, parse_mode="HTML", reply_markup=order_kb(code))
+        await context.bot.send_photo(q.message.chat_id, p["img"], caption=cap, parse_mode="HTML", reply_markup=kb_buy(code))
+        context.user_data["sel_code"] = code
         return
 
-    # شروع سفارش
-    if data.startswith("ordP_") or data.startswith("ordI_"):
-        dest = "PERUGIA" if data.startswith("ordP_") else "ITALY"
-        code = data[5:]
-        context.user_data.update({"dest": dest, "code": code})
+    # شروع فرم سفارش
+    if d.startswith("buyP_") or d.startswith("buyI_"):
+        context.user_data["dest"] = "PERUGIA" if d.startswith("buyP_") else "ITALY"
+        context.user_data["sel_code"] = d[5:]
         await q.message.reply_text("👤 نام و نام خانوادگی / Nome e cognome:")
         return NAME
 
-# ───── order flow
-async def name_h(update: Update, context):
+# ───── گفتگو سفارش
+async def h_name(update: Update, context):
     context.user_data["name"] = update.message.text
     await update.message.reply_text("🏠 آدرس / Indirizzo:")
     return ADDRESS
 
-async def addr_h(update: Update, context):
+async def h_address(update: Update, context):
     context.user_data["addr"] = update.message.text
     if context.user_data["dest"] == "ITALY":
         await update.message.reply_text("🔢 کد پستی / CAP:")
@@ -150,38 +157,38 @@ async def addr_h(update: Update, context):
     await update.message.reply_text("☎️ تلفن / Telefono:")
     return PHONE
 
-async def cap_h(update: Update, context):
+async def h_cap(update: Update, context):
     context.user_data["cap"] = update.message.text
     await update.message.reply_text("☎️ تلفن / Telefono:")
     return PHONE
 
-async def phone_h(update: Update, context):
+async def h_phone(update: Update, context):
     context.user_data["phone"] = update.message.text
-    await update.message.reply_text("📝 یادداشت / Note (یا بنویسید «ندارم»):")
+    await update.message.reply_text("📝 یادداشت / Note (یا 'ندارم'):")
     return NOTES
 
-async def notes_h(update: Update, context):
+async def h_notes(update: Update, context):
     context.user_data["notes"] = update.message.text
+    p = PRODUCTS[context.user_data["sel_code"]]
     u = update.effective_user
-    p = PRODUCTS[context.user_data["code"]]
     row = [
         datetime.datetime.utcnow().isoformat(" ", "seconds"),
-        context.user_data["name"], context.user_data["addr"], context.user_data.get("cap", "-"),
-        context.user_data["phone"], p["label"], p["price"], context.user_data["notes"],
+        context.user_data["dest"], context.user_data["name"], context.user_data["addr"],
+        context.user_data.get("cap", "-"), context.user_data["phone"],
+        p["label"], p["price"], context.user_data["notes"],
         f"@{u.username}" if u.username else "-",
     ]
     await asyncio.get_running_loop().run_in_executor(None, sheet.append_row, row)
 
     summary = (
-        "✅ سفارش ثبت شد!\n"
-        f"👤 {row[1]}\n📍 {row[2]} {row[3]}\n☎️ {row[4]}\n"
-        f"📦 {row[5]} – {p['price']}\n📝 {row[7]}"
+        "✅ سفارش ثبت شد! / Ordine ricevuto!\n\n"
+        f"👤 {row[2]}\n📍 {row[3]} {row[4]}\n☎️ {row[5]}\n" +
+        f"📦 {row[6]} – {row[7]}\n📝 {row[8]}"
     )
-    await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("بازگشت به منو / Menu", callback_data="back_main")]]))
+    await update.message.reply_text(summary, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو / Menu", callback_data="back_main")]]))
 
-    admin_msg = (
-        "📥 <b>سفارش جدید</b>\n\n" + summary.replace("✅ سفارش ثبت شد!\n", ""))
-    await context.bot.send_message(ADMIN_ID, admin_msg, parse_mode="HTML")
+    admin = "📥 <b>سفارش جدید</b>\n\n" + summary.replace("✅ سفارش ثبت شد! / Ordine ricevuto!\n\n", "")
+    await context.bot.send_message(ADMIN_ID, admin, parse_mode="HTML")
     return ConversationHandler.END
 
 async def cancel(update: Update, _):
@@ -191,21 +198,23 @@ async def cancel(update: Update, _):
 # ───── main ─────
 logging.basicConfig(level=logging.INFO)
 app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("privacy", lambda u, c: u.message.reply_html("<pre>privacy…</pre>")))
-app.add_handler(CallbackQueryHandler(menu_router))
-order_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(menu_router, pattern=r"^ord[PI]_")],
+app.add_handler(CommandHandler("start", cmd_start))
+app.add_handler(CommandHandler("about", lambda u, c: u.message.reply_text(ABOUT)))
+app.add_handler(CommandHandler("privacy", lambda u, c: u.message.reply_html("<pre>Privacy…</pre>")))
+app.add_handler(CallbackQueryHandler(cb_router))
+
+conv = ConversationHandler(
+    entry_points=[CallbackQueryHandler(cb_router, pattern=r"^buy[PI]_")],
     states={
-        NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, name_h)],
-        ADDRESS:[MessageHandler(filters.TEXT & ~filters.COMMAND, addr_h)],
-        POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, cap_h)],
-        PHONE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, phone_h)],
-        NOTES:  [MessageHandler(filters.TEXT & ~filters.COMMAND, notes_h)],
+        NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, h_name)],
+        ADDRESS:[MessageHandler(filters.TEXT & ~filters.COMMAND, h_address)],
+        POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, h_cap)],
+        PHONE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, h_phone)],
+        NOTES:  [MessageHandler(filters.TEXT & ~filters.COMMAND, h_notes)],
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
-app.add_handler(order_conv)
+app.add_handler(conv)
 
 app.run_webhook(
     listen="0.0.0.0", port=int(os.getenv("PORT", 8080)), url_path=TOKEN,
