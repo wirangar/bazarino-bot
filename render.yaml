@@ -2,9 +2,7 @@ services:
   - type: web
     name: bazarino-bot
     env: python
+    plan: free
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
-    plan: free
-    envVars:
-      - key: TELEGRAM_TOKEN
-        sync: false
+    pythonVersion: 3.12.3
