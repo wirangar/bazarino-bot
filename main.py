@@ -1,66 +1,69 @@
 import os
-import json
 import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
-# ───── تنظیمات پایه و لاگ‌ها ─────
+# 📌 فعال‌سازی لاگ‌ها
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-# ───── محیط ─────
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))
+# 📌 مقادیر محیطی
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-SHEET_NAME = "Bazarnio Orders"  # ← اسم Google Sheet شما
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
-# ───── Google Sheets ─────
-scope = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-]
-
+# 📌 تنظیمات Google Sheet
+SHEET_NAME = "Bazarnio Orders"
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name(
-    "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json",  # ← دقیقاً اسم Secret File
-    scope,
+    "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json", scope
 )
-sheet = gspread.authorize(creds).open(SHEET_NAME).sheet1
+client = gspread.authorize(creds)
+sheet = client.open(SHEET_NAME).sheet1
 
-
-# ───── دستور /start ─────
+# 🔸 دستور شروع
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await update.message.reply_text(
-        f"سلام {user.first_name} 👋\n"
-        f"به ربات خرید محصولات ایرانی در پروجا خوش اومدی!\n"
-        f"برای ثبت سفارش، لطفاً محصول مورد نظرت رو تایپ کن."
-    )
+    await update.message.reply_text("سلام! برای سفارش، لطفاً پیام خود را به این صورت وارد کنید:\n\nنام، آدرس، شماره تماس، محصول، تعداد، توضیحات")
 
+# 🔸 ثبت سفارش از هر پیام معمولی
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    user = update.message.from_user
 
-# ───── دستور /order ─────
-async def order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    msg = " ".join(context.args)
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        data = text.split("،")
+        if len(data) < 6:
+            await update.message.reply_text("فرمت درست نیست. لطفاً ۶ بخش را با ویرگول فارسی جدا کنید.")
+            return
 
-    if not msg:
-        await update.message.reply_text("❗ لطفاً بعد از /order متن سفارشت رو بنویس.")
-        return
+        name, address, phone, product, quantity, notes = [x.strip() for x in data]
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        username = user.username if user.username else "بدون یوزرنیم"
 
-    # ذخیره در Google Sheets
-    sheet.append_row([timestamp, user.username, user.id, msg])
+        row = [timestamp, name, address, phone, product, quantity, notes, username]
+        sheet.append_row(row)
+        await update.message.reply_text("✅ سفارش با موفقیت ثبت شد!")
 
-    await update.message.reply_text("✅ سفارشت ثبت شد. به زودی باهات تماس می‌گیریم.")
-    await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"🛒 سفارش جدید:\n{msg}")
+        # به ادمین هم پیام بده
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"📥 سفارش جدید:\n\n{text}")
 
+    except Exception as e:
+        await update.message.reply_text("⛔ مشکلی در ثبت سفارش پیش آمد.")
+        logging.error(f"Error: {e}")
 
-# ───── اجرا ─────
+# 🔧 اجرای برنامه
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("order", order))
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 10000)),
