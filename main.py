@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bazarino Telegram Bot – final version with shopping cart
+Bazarino Telegram Bot – final version with shopping-cart
 --------------------------------------------------------
 
-• منوی دو‌زبانه (فارسی/ایتالیایی) + سبد چند‌محصولی.
-• ذخیره سفارش در Google Sheets با وضعیت (Pending / COD).
+• منوی دو‌زبانه + سبد چندمحصولی.
+• ثبت سفارش در Google Sheets با وضعیت (Pending / COD).
 • پرداخت تلگرامی (Stripe) برای مقصد «Italia».
-• python-telegram-bot v20.7 - Python 3.11.
+• python-telegram-bot v20.7   |   Python 3.11
 """
 
 from __future__ import annotations
-
 import asyncio, datetime, json, logging, os, textwrap, uuid
 from functools import partial
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -62,12 +61,12 @@ CATEGORIES: Dict[str, str] = {
     "canned": "🥫 کنسرو / Conserve",
 }
 PRODUCTS: Dict[str, Dict[str, Any]] = {
-    "rice_hashemi":  dict(cat="rice",  fa="برنج هاشمی", it="Riso Hashemi",
-                          desc="عطر بالا / Profumato", weight="1 kg",
-                          price=6.0, image_url="https://i.imgur.com/paddy.jpg"),
-    "bean_lentil":   dict(cat="beans", fa="عدس", it="Lenticchie",
-                          desc="عدس سبز / Lenticchie verdi", weight="1 kg",
-                          price=4.0, image_url="https://i.imgur.com/lentil.jpg"),
+    "rice_hashemi": dict(cat="rice",  fa="برنج هاشمی", it="Riso Hashemi",
+                         desc="عطر بالا / Profumato", weight="1 kg",
+                         price=6.0, image_url="https://i.imgur.com/paddy.jpg"),
+    "bean_lentil":  dict(cat="beans", fa="عدس", it="Lenticchie",
+                         desc="عدس سبز / Lenticchie verdi", weight="1 kg",
+                         price=4.0, image_url="https://i.imgur.com/lentil.jpg"),
 }
 
 # ─────────── texts
@@ -83,14 +82,14 @@ PRIVACY = "اطلاعات شما فقط برای پردازش سفارش است�
 NO_PAY  = "❌ پرداخت آنلاین فعال نیست؛ لطفاً «سفارش پروجا» را انتخاب کنید."
 CART_EMPTY = "سبد خرید شما خالی است."
 
-# ─────────── helpers: keyboards
+# ─────────── keyboards
 def cart_count(ctx) -> int:
     return sum(i["quantity"] for i in ctx.user_data.get("cart", []))
 
 def kb_main(ctx) -> InlineKeyboardMarkup:
     btns = [[InlineKeyboardButton(lbl, callback_data=f"cat_{k}")]
             for k, lbl in CATEGORIES.items()]
-    cnt  = cart_count(ctx)
+    cnt = cart_count(ctx)
     btns.append([InlineKeyboardButton(f"🛒 سبد خرید من ({cnt})" if cnt else "🛒 سبد خرید من",
                                       callback_data="show_cart")])
     return InlineKeyboardMarkup(btns)
@@ -114,88 +113,101 @@ def kb_cart() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⬅️ ادامه خرید", callback_data="back_main")],
     ])
 
-# ─────────── callback router
+# ─────────── router
 async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q, uid = update.callback_query, update.effective_user.id
+    q, data = update.callback_query, update.callback_query.data
     await q.answer()
-    data = q.data
 
-    # navigation
     if data == "back_main":
         await q.edit_message_text(WELCOME, reply_markup=kb_main(ctx))
+
     elif data.startswith("back_"):
         cat = data[5:]
         await q.edit_message_text(CATEGORIES.get(cat, "❓"), reply_markup=kb_category(cat, ctx))
+
     elif data.startswith("cat_"):
         cat = data[4:]
         await q.edit_message_text(CATEGORIES.get(cat, "❓"), reply_markup=kb_category(cat, ctx))
 
-    # show product
     elif data.startswith("prd_"):
         code = data[4:]; p = PRODUCTS[code]
         cap = f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\nوزن: {p['weight']}\nقیمت: €{p['price']:.2f}"
         await q.message.delete()
         await q.message.chat.send_photo(p["image_url"], cap, parse_mode="HTML", reply_markup=kb_product(code))
 
-    # add to cart
     elif data.startswith("add_"):
         code = data[4:]; cart = ctx.user_data.setdefault("cart", [])
-        for item in cart:
-            if item["code"] == code:
-                item["quantity"] += 1; break
+        for it in cart:
+            if it["code"] == code:
+                it["quantity"] += 1; break
         else:
             cart.append(dict(code=code, quantity=1))
         await q.message.reply_text("✅ به سبد افزوده شد.")
         await q.edit_message_reply_markup(kb_main(ctx))
 
-    # show cart
     elif data == "show_cart":
         if not ctx.user_data.get("cart"):
-            await q.edit_message_text(CART_EMPTY, reply_markup=kb_main(ctx))
-            return
-        total, txt = 0.0, "🛒 <b>سبد خرید:</b>\n"
+            await q.edit_message_text(CART_EMPTY, reply_markup=kb_main(ctx)); return
+        txt, tot = "🛒 <b>سبد خرید:</b>\n", 0.0
         for it in ctx.user_data["cart"]:
-            p = PRODUCTS[it["code"]]; line = p['price']*it['quantity']; total += line
-            txt += f"• {p['fa']} × {it['quantity']} = €{line:.2f}\n"
-        txt += f"\n<b>مجموع: €{total:.2f}</b>"
-        ctx.user_data["total"] = total
+            p=PRODUCTS[it["code"]]; line=p['price']*it['quantity']; tot+=line
+            txt+=f"• {p['fa']} × {it['quantity']} = €{line:.2f}\n"
+        txt += f"\n<b>مجموع: €{tot:.2f}</b>"
+        ctx.user_data["total"] = tot
         await q.edit_message_text(txt, parse_mode="HTML", reply_markup=kb_cart())
 
-    # clear cart
     elif data == "clear_cart":
         ctx.user_data.clear()
         await q.edit_message_text("🗑️ سبد خرید خالی شد.", reply_markup=kb_main(ctx))
 
-    # checkout choose dest
     elif data == "checkout":
         if not ctx.user_data.get("cart"):
             await q.answer("سبد خالی است.", show_alert=True); return
-        await q.edit_message_text(
-            "نحوه تحویل و پرداخت را انتخاب کنید:",
+        await q.edit_message_text("نحوه تحویل و پرداخت را انتخاب کنید:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🛒 پروجا (نقدی)", callback_data="dest_Perugia")],
                 [InlineKeyboardButton("📦 ایتالیا (آنلاین)", callback_data="dest_Italia")],
             ]))
 
-    # start form
     elif data.startswith("dest_"):
-        dest = data[5:]; ctx.user_data["dest"] = dest
-        if dest == "Italia" and not STRIPE:
+        ctx.user_data["dest"] = data[5:]
+        if ctx.user_data["dest"] == "Italia" and not STRIPE:
             await q.answer(NO_PAY, show_alert=True); return
         await q.message.reply_text("👤 نام و نام خانوادگی:")
         return NAME
 
 # ─────────── form steps
-async def step_name(u, ctx):    ctx.user_data["name"]=u.message.text.strip(); await u.message.reply_text("📍 آدرس:"); return ADDRESS
-async def step_address(u, ctx): ctx.user_data["address"]=u.message.text.strip(); 
-                                if ctx.user_data["dest"]=="Italia": await u.message.reply_text("🔢 کد پستی:"); return POSTAL
-                                await u.message.reply_text("☎️ تلفن:"); return PHONE
-async def step_postal(u, ctx):  p=u.message.text.strip(); 
-                                if not p.isdigit() or len(p)!=5: await u.message.reply_text("❌ کد پستی ۵ رقمی وارد کنید:"); return POSTAL
-                                ctx.user_data["postal"]=p; await u.message.reply_text("☎️ تلفن:"); return PHONE
-async def step_phone(u, ctx):   ctx.user_data["phone"]=u.message.text.strip(); await u.message.reply_text("📝 یادداشت (اختیاری):"); return NOTES
+async def step_name(u, ctx):
+    ctx.user_data["name"]=u.message.text.strip()
+    if not ctx.user_data["name"]:
+        await u.message.reply_text("❌ نام نمی‌تواند خالی باشد. دوباره وارد کنید:"); return NAME
+    await u.message.reply_text("📍 آدرس:"); return ADDRESS
+
+async def step_address(u, ctx):
+    ctx.user_data["address"]=u.message.text.strip()
+    if not ctx.user_data["address"]:
+        await u.message.reply_text("❌ آدرس خالی است. دوباره:"); return ADDRESS
+    if ctx.user_data["dest"]=="Italia":
+        await u.message.reply_text("🔢 کد پستی (۵ رقم):"); return POSTAL
+    await u.message.reply_text("☎️ تلفن:"); return PHONE
+
+async def step_postal(u, ctx):
+    p=u.message.text.strip()
+    if not (p.isdigit() and len(p)==5):
+        await u.message.reply_text("❌ کد پستی باید ۵ رقم باشد:"); return POSTAL
+    ctx.user_data["postal"]=p
+    await u.message.reply_text("☎️ تلفن:"); return PHONE
+
+async def step_phone(u, ctx):
+    ph=u.message.text.strip()
+    if not ph.replace("+","").replace(" ","").isdigit():
+        await u.message.reply_text("❌ شماره معتبر نیست. دوباره:"); return PHONE
+    ctx.user_data["phone"]=ph
+    await u.message.reply_text("📝 یادداشت (اختیاری):"); return NOTES
+
 async def step_notes(u, ctx):
     ctx.user_data["notes"]=u.message.text or "-"
+    status="COD"
     if ctx.user_data["dest"]=="Italia":
         amt=int(ctx.user_data["total"]*100)
         await u.message.reply_invoice(
@@ -205,34 +217,34 @@ async def step_notes(u, ctx):
         status="Pending"
     else:
         await u.message.reply_text("✅ سفارش ثبت شد؛ به‌زودی تماس می‌گیریم.", reply_markup=ReplyKeyboardRemove())
-        status="COD"
-    await save_order(u, ctx, status); return ConversationHandler.END
+    await save_order(u, ctx, status)
+    return ConversationHandler.END
 
 # ─────────── save order
 async def save_order(u, ctx, status):
-    cart = ctx.user_data["cart"]; summary=[]; total=0
+    cart=ctx.user_data["cart"]; summary=[]; total=0
     for it in cart:
         p=PRODUCTS[it["code"]]; cost=p["price"]*it["quantity"]; total+=cost
         summary.append(f"{p['fa']}×{it['quantity']}(€{cost:.2f})")
-    row=[datetime.datetime.utcnow().isoformat(" ", "seconds"), u.effective_chat.id,
-         f"@{u.effective_user.username}" if u.effective_user.username else "-",
-         ctx.user_data["dest"], ", ".join(summary), f"{total:.2f}",
-         ctx.user_data["name"], ctx.user_data["address"], ctx.user_data.get("postal","-"),
-         ctx.user_data["phone"], ctx.user_data["notes"], status]
+    row=[
+        datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        u.effective_chat.id,
+        f"@{u.effective_user.username}" if u.effective_user.username else "-",
+        ctx.user_data["dest"], ", ".join(summary), f"{total:.2f}",
+        ctx.user_data["name"], ctx.user_data["address"], ctx.user_data.get("postal","-"),
+        ctx.user_data["phone"], ctx.user_data["notes"], status]
     await asyncio.get_running_loop().run_in_executor(None, partial(sheet.append_row, row))
     ctx.user_data.clear()
     if ADMIN:
-        msg = ("📥 <b>سفارش جدید</b>\n"
-               f"🏷 مقصد: {row[3]}\n"
-               f"📦 {row[4]}\n💰 €{total:.2f}\n"
-               f"👤 {row[6]}\n📍 {row[7]} {row[8]}\n☎️ {row[9]}\n📝 {row[10]}")
+        msg=("📥 <b>سفارش جدید</b>\n"
+             f"🏷 مقصد: {row[3]}\n📦 {row[4]}\n💰 €{total:.2f}\n"
+             f"👤 {row[6]}\n📍 {row[7]} {row[8]}\n☎️ {row[9]}\n📝 {row[10]}")
         await u.get_bot().send_message(ADMIN, msg, parse_mode="HTML")
 
-# ─────────── payments
-async def precheckout(upd, _): await upd.pre_checkout_query.answer(ok=True)
-async def paid(upd, ctx):
+# ─────────── payment handlers
+async def precheckout(upd,_): await upd.pre_checkout_query.answer(ok=True)
+async def paid(upd, _):
     await upd.message.reply_text("💳 پرداخت موفق! سفارش در حال پردازش است.", reply_markup=ReplyKeyboardRemove())
-    # در صورت نیاز: به‌روزرسانی وضعیت در شیت
 
 # ─────────── cancel
 async def cancel(u, ctx):
@@ -241,9 +253,9 @@ async def cancel(u, ctx):
     return ConversationHandler.END
 
 # ─────────── commands
-async def start(u, ctx): await u.message.reply_html(WELCOME, reply_markup=kb_main(ctx))
-async def about(u,_):    await u.message.reply_html(ABOUT)
-async def privacy(u,_):  await u.message.reply_html(PRIVACY)
+async def start(u, ctx):   await u.message.reply_html(WELCOME, reply_markup=kb_main(ctx))
+async def about(u,_):      await u.message.reply_html(ABOUT)
+async def privacy(u,_):    await u.message.reply_html(PRIVACY)
 
 # ─────────── main
 def main():
@@ -251,9 +263,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("about", about))
     app.add_handler(CommandHandler("privacy", privacy))
-    # router (excluding dest_ which opens form)
     app.add_handler(CallbackQueryHandler(router, pattern="^(back_|cat_|prd_|add_|show_cart|clear_cart|checkout)$"))
-    # form conversation
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(router, pattern="^dest_")],
         states={NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND, step_name)],
