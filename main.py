@@ -1,26 +1,17 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bazarino Telegram Bot – Full version (Phases 1‑4)
-- Dynamic products from Google Sheets
-- Stock check + low‑stock alert to admin
-- Rich cart UI with + / – / ❌
-- /search command
-- Order buttons (Perugia / Italy)
-- Order form with auto‑prefill name & username
-- Structured order saving to Google Sheets
-- Confirmation message to user and admin
-- Optional promo message (PROMO_AFTER_ORDER) from messages.json
+Bazarino Telegram Bot – FINAL (Webhook)
 """
 
 from __future__ import annotations
 import asyncio, datetime as dt, json, logging, os, re, uuid
-from functools import partial
 from typing import Dict, Any, List
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from fastapi import FastAPI, Request
+import uvicorn
 from telegram import (
     InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 )
@@ -28,7 +19,7 @@ from telegram.ext import (
     ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes,
     ConversationHandler, MessageHandler, filters,
 )
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError
 
 # ───────────── Logging
 logging.basicConfig(
@@ -37,248 +28,260 @@ logging.basicConfig(
 )
 log = logging.getLogger("bazarino")
 
-# ───────────── Load localisation messages
+# ───────────── Messages
 with open("messages.json", encoding="utf-8") as f:
     MSG = json.load(f)
-def m(key: str) -> str: return MSG.get(key, f"[{key}]")
+def m(k:str)->str: return MSG.get(k, f"[{k}]")
 
-# ───────────── ENV & Sheets
-TOKEN       = os.getenv("TELEGRAM_TOKEN")
-ADMIN_ID    = int(os.getenv("ADMIN_CHAT_ID", "0"))
-SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
-PRODUCT_WS  = os.getenv("PRODUCT_WORKSHEET", "Sheet2")
+# ───────────── ENV
+for v in ("TELEGRAM_TOKEN","ADMIN_CHAT_ID","GOOGLE_CREDS","BASE_URL"):
+    if not os.getenv(v): raise SystemExit(f"❗️ ENV {v} unset")
+TOKEN          = os.getenv("TELEGRAM_TOKEN")
+BASE_URL       = os.getenv("BASE_URL").rstrip("/")
+ADMIN_ID       = int(os.getenv("ADMIN_CHAT_ID"))
+SPREADSHEET    = os.getenv("SPREADSHEET_NAME","Bazarnio Orders")
+PRODUCT_WS     = os.getenv("PRODUCT_WORKSHEET","Sheet2")
+LOW_STOCK_TH   = int(os.getenv("LOW_STOCK_THRESHOLD","3"))
+PORT           = int(os.getenv("PORT","8000"))
+CREDS_PATH     = os.getenv("GOOGLE_CREDS")
 
-# --- Google credentials ---
-#  روش دوم: استفاده از Secret File ذخیره‌شده در Render
-CREDS_PATH  = os.getenv("GOOGLE_CREDS", "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json")
-try:
-    with open(CREDS_PATH, "r", encoding="utf-8") as f:
-        CREDS_INFO = json.load(f)
-except FileNotFoundError:
-    raise SystemExit(f"❗️ فایل Google Credentials در {CREDS_PATH} یافت نشد. \
-مطمئن شو Secret File را در Render ایجاد کرده‌ای یا مسیر را در متغیر GOOGLE_CREDS تنظیم کرده‌ای.")
-
-# اتصال به Google Sheets
-scope = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive"
-]
-gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(CREDS_INFO, scope))
-wb = gc.open(SPREADSHEET)
+# ───────────── Google-Sheets
+scope   = ["https://spreadsheets.google.com/feeds",
+           "https://www.googleapis.com/auth/drive"]
+gc      = gspread.authorize(
+            ServiceAccountCredentials.from_json_keyfile_name(CREDS_PATH, scope))
+wb          = gc.open(SPREADSHEET)
 orders_ws   = wb.sheet1
 products_ws = wb.worksheet(PRODUCT_WS)
 
+def load_products()->Dict[str,Dict[str,Any]]:
+    return {
+        r["id"]:dict(
+            cat =r["cat"], fa=r["fa"], it=r["it"], brand=r["brand"],
+            desc=r["description"], weight=r["weight"],
+            price=float(r["price"]), image_url=r["image_url"],
+            stock=int(r.get("stock",0))
+        ) for r in products_ws.get_all_records()
+    }
 
-# ───────────── Load products
-def load_products() -> Dict[str, Dict[str, Any]]:
-    data = products_ws.get_all_records()
-    prod = {}
-    for r in data:
-        prod[r["id"]] = {
-            "cat": r["cat"], "fa": r["fa"], "it": r["it"],
-            "brand": r["brand"], "desc": r["description"], "weight": r["weight"],
-            "price": float(r["price"]), "image_url": r["image_url"],
-            "stock": int(r.get("stock", 0)),
-        }
-    log.info("Loaded %d products", len(prod))
-    return prod
-PRODUCTS = load_products()
+# --- tiny 15-sec cache so we don’t hit Sheets every click
+def get_products():
+    if not getattr(get_products,"_data",None) or dt.datetime.utcnow()>get_products._ts:
+        get_products._data=load_products()
+        get_products._ts  =dt.datetime.utcnow()+dt.timedelta(seconds=15)
+    return get_products._data
 
-EMOJI = {"rice":"🍚 برنج / Riso","beans":"🥣 حبوبات / Legumi","spice":"🌿 ادویه / Spezie",
-         "nuts":"🥜 خشکبار / Frutta secca","drink":"🧃 نوشیدنی / Bevande",
-         "canned":"🥫 کنسرو / Conserve","sweet":"🍬 شیرینی / Dolci"}
-CATEGORIES = {p["cat"]: EMOJI.get(p["cat"], p["cat"]) for p in PRODUCTS.values()}
+EMOJI = {
+  "rice":"🍚 برنج / Riso","beans":"🥣 حبوبات / Legumi","spice":"🌿 ادویه / Spezie",
+  "nuts":"🥜 خشکبار / Frutta secca","drink":"🧃 نوشیدنی / Bevande",
+  "canned":"🥫 کنسرو / Conserve","sweet":"🍬 شیرینی / Dolci"
+}
 
 # ───────────── Validators
-phone_re = re.compile(r"^\+?\d{8,15}$")
-def ok_phone(p:str)->bool: return bool(phone_re.fullmatch(p.strip()))
-def ok_addr(a:str)->bool:  return len(a.strip())>10 and any(ch.isdigit() for ch in a)
+phone_re=re.compile(r"^\+?\d{8,15}$")
+ok_phone=lambda p:bool(phone_re.fullmatch(p.strip()))
+ok_addr =lambda a: len(a.strip())>10 and any(c.isdigit() for c in a)
 
 # ───────────── Helpers
-def cart_total(cart): return sum(i["qty"]*i["price"] for i in cart)
-def cart_count(ctx):  return sum(i["qty"] for i in ctx.user_data.get("cart",[]))
+cart_total=lambda c:sum(i["qty"]*i["price"] for i in c)
+cart_count=lambda ctx:sum(i["qty"] for i in ctx.user_data.get("cart",[]))
 
 async def safe_edit(q,*a,**k):
-    try: await q.edit_message_text(*a,**k)
+    try:             await q.edit_message_text(*a,**k)
     except BadRequest as e:
         if "not modified" in str(e): return
-        raise
+        log.error(e)
+
+async def alert_admin(pid,stock):
+    if stock<=LOW_STOCK_TH and ADMIN_ID:
+        await bot.send_message(ADMIN_ID,f"⚠️ موجودی کم {stock}: {get_products()[pid]['fa']}")
 
 # ───────────── Keyboards
 def kb_main(ctx):
-    rows=[[InlineKeyboardButton(lbl, callback_data=f"cat_{c}")]
-          for c,lbl in CATEGORIES.items()]
+    cats={p["cat"] for p in get_products().values()}
+    rows=[[InlineKeyboardButton(EMOJI.get(c,c),callback_data=f"cat_{c}")] for c in cats]
     rows.append([InlineKeyboardButton(f"🛒 سبد ({cart_count(ctx)})",callback_data="cart")])
     return InlineKeyboardMarkup(rows)
 
-def kb_category(cat, ctx):
-    rows=[[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")]
-          for pid,p in PRODUCTS.items() if p["cat"]==cat]
-    rows.append([InlineKeyboardButton("⬅️ بازگشت", callback_data="back")])
+def kb_category(cat,ctx):
+    rows=[[InlineKeyboardButton(f"{p['fa']} / {p['it']}",callback_data=f"show_{pid}")]
+          for pid,p in get_products().items() if p["cat"]==cat]
+    rows.append([InlineKeyboardButton("⬅️ بازگشت",callback_data="back")])
     return InlineKeyboardMarkup(rows)
 
 def kb_product(pid):
+    p=get_products()[pid]
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ افزودن به سبد", callback_data=f"add_{pid}")],
+        [InlineKeyboardButton("➕ افزودن به سبد",callback_data=f"add_{pid}")],
         [
-            InlineKeyboardButton("📦 پروجا",  callback_data=f"order_perugia_{pid}"),
-            InlineKeyboardButton("🚚 ایتالیا", callback_data=f"order_italy_{pid}")
+            InlineKeyboardButton("📦 پروجا",callback_data=f"order_perugia_{pid}"),
+            InlineKeyboardButton("🚚 ایتالیا",callback_data=f"order_italy_{pid}")
         ],
-        [InlineKeyboardButton("⬅️ دسته قبل", callback_data=f"back_cat_{PRODUCTS[pid]['cat']}")]
+        [InlineKeyboardButton("⬅️ دسته قبل",callback_data=f"back_cat_{p['cat']}")]
     ])
 
 def kb_cart(cart):
     rows=[]
     for it in cart:
-        pid=it["id"]; qty=it["qty"]
+        pid=it["id"]
         rows.append([
             InlineKeyboardButton("➕",callback_data=f"inc_{pid}"),
-            InlineKeyboardButton(f"{qty}× {it['fa']}",callback_data="ignore"),
+            InlineKeyboardButton(f"{it['qty']}× {it['fa']}",callback_data="ignore"),
             InlineKeyboardButton("➖",callback_data=f"dec_{pid}"),
             InlineKeyboardButton("❌",callback_data=f"del_{pid}")
         ])
-    rows.append([InlineKeyboardButton("✔️ ادامه",callback_data="checkout"),
-                 InlineKeyboardButton("⬅️ منو",callback_data="back")])
+    rows.append([
+        InlineKeyboardButton("✔️ ادامه",callback_data="checkout"),
+        InlineKeyboardButton("⬅️ منو",callback_data="back")
+    ])
     return InlineKeyboardMarkup(rows)
 
-# ───────────── Stock, cart ops, admin alert
-def alert_admin(pid):
-    p=PRODUCTS[pid]; stock=p["stock"]
-    if stock<=3 and ADMIN_ID:
-        try: bot.send_message(ADMIN_ID, f"⚠️ موجودی کم: {p['fa']} - {stock}")
-        except: pass
-
-def add_cart(ctx, pid, qty=1):
-    if pid not in PRODUCTS: return False,"❌ یافت نشد."
-    p=PRODUCTS[pid]; stock=p["stock"]
+# ───────────── Cart operations
+async def add_cart(ctx,pid,qty=1):
+    prods=get_products()
+    if pid not in prods: return False,"❌ محصول یافت نشد."
+    p=prods[pid]
+    stock=p["stock"]
     cart=ctx.user_data.setdefault("cart",[])
     cur=next((i for i in cart if i["id"]==pid),None)
     cur_qty=cur["qty"] if cur else 0
-    if stock<=cur_qty:
-        return False,"❗️ موجودی کافی نیست"
+    if stock<cur_qty+qty: return False,"❗️ موجودی کافی نیست."
     if cur: cur["qty"]+=qty
-    else: cart.append({"id":pid,"fa":p["fa"],"weight":p["weight"],
-                       "price":p["price"],"qty":qty})
-    alert_admin(pid)
-    return True,"✅ افزوده شد"
+    else: cart.append(dict(id=pid,fa=p["fa"],price=p["price"],weight=p["weight"],qty=qty))
+    await alert_admin(pid,stock)
+    return True,"✅ به سبد اضافه شد."
 
-# ───────────── Format Cart
 def fmt_cart(cart):
     if not cart: return m("CART_EMPTY")
     lines=["🛍 <b>سبد خرید:</b>",""]
-    total=0
+    tot=0
     for it in cart:
-        sub=it["qty"]*it["price"]; total+=sub
-        lines.append(f"▫️{it['qty']}× {it['fa']} ({it['weight']}) — {it['price']:.2f}€ = <b>{sub:.2f}€</b>")
-    lines.append(""); lines.append(f"💶 <b>جمع:</b> {total:.2f}€")
+        sub=it["qty"]*it["price"]; tot+=sub
+        lines.append(f"▫️ {it['qty']}× {it['fa']} — {sub:.2f}€")
+    lines.append(""); lines.append(f"💶 <b>جمع:</b> {tot:.2f}€")
     return "\n".join(lines)
 
+# ───────────── Stock update
+def update_stock(cart):
+    try:
+        records=products_ws.get_all_records()
+        for it in cart:
+            pid=it["id"]; qty=it["qty"]
+            for idx,row in enumerate(records,start=2):
+                if row["id"]==pid:
+                    new=row["stock"]-qty
+                    if new<0: return False
+                    products_ws.update_cell(idx,10,new)   # ← ستون ۱۰ (J)
+                    get_products().get(pid)["stock"]=new
+        return True
+    except Exception as e:
+        log.error(f"Stock update error: {e}"); return False
+
 # ───────────── Router
-async def router(update:Update,ctx:ContextTypes.DEFAULT_TYPE):
+async def router(update:Update,ctx):
     q=update.callback_query; d=q.data; await q.answer()
-    if d=="back":
-        await safe_edit(q,m("WELCOME"),reply_markup=kb_main(ctx),parse_mode="HTML"); return
+    if d=="back": await safe_edit(q,m("WELCOME"),reply_markup=kb_main(ctx),parse_mode="HTML"); return
     if d.startswith("cat_"):
         await safe_edit(q,EMOJI.get(d[4:],d[4:]),reply_markup=kb_category(d[4:],ctx)); return
     if d.startswith("show_"):
-        pid=d[5:]; p=PRODUCTS[pid]
-        cap=f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\n{p['price']}€ / {p['weight']}"
+        pid=d[5:]; p=get_products()[pid]
+        cap=f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\n{p['price']}€ / {p['weight']}\nموجودی: {p['stock']}"
         await q.message.answer_photo(p["image_url"],caption=cap,reply_markup=kb_product(pid),parse_mode="HTML"); return
     if d.startswith("add_"):
-        ok,msg=add_cart(ctx,d[4:]); await q.answer(msg,show_alert=not ok); return
+        ok,msg=await add_cart(ctx,d[4:]); await q.answer(msg,show_alert=not ok); return
     if d=="cart":
-        cart=ctx.user_data.get("cart",[]); await safe_edit(q,fmt_cart(cart),parse_mode="HTML",reply_markup=kb_cart(cart)); return
-    # inc/dec/del
+        await safe_edit(q,fmt_cart(ctx.user_data.get("cart",[])),reply_markup=kb_cart(ctx.user_data.get("cart",[])),parse_mode="HTML"); return
     if d.startswith(("inc_","dec_","del_")):
-        pid=d.split("_")[1]; cart=ctx.user_data.get("cart",[])
-        item=next((i for i in cart if i["id"]==pid),None)
-        if not item: return
-        if d.startswith("inc_"): add_cart(ctx,pid,1)
-        elif d.startswith("dec_"): item["qty"]=max(1,item["qty"]-1)
-        else: cart.remove(item)
-        await safe_edit(q,fmt_cart(cart),parse_mode="HTML",reply_markup=kb_cart(cart)); return
+        pid=d.split("_")[1]; cart=ctx.user_data.get("cart",[]); it=next((i for i in cart if i["id"]==pid),None)
+        if not it: return
+        if d.startswith("inc_"): await add_cart(ctx,pid,1)
+        elif d.startswith("dec_"): it["qty"]=max(1,it["qty"]-1)
+        else: cart.remove(it)
+        await safe_edit(q,fmt_cart(cart),reply_markup=kb_cart(cart),parse_mode="HTML"); return
 
-# ───────────── Search command
+# ───────────── /search
 from difflib import get_close_matches
 async def cmd_search(u,ctx):
     q=" ".join(ctx.args).lower()
     if not q: await u.message.reply_text(m("SEARCH_USAGE")); return
-    res=[(pid,p) for pid,p in PRODUCTS.items()
-         if q in p['fa'].lower() or q in p['it'].lower()
-         or get_close_matches(q,[p['fa'].lower()+" "+p['it'].lower()],cutoff=0.6)]
-    if not res: await u.message.reply_text(m("SEARCH_NONE")); return
-    for pid,p in res[:5]:
-        cap=f"🛍 {p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€ / {p['weight']}"
+    hits=[(pid,p) for pid,p in get_products().items()
+          if q in p['fa'].lower() or q in p['it'].lower()
+          or get_close_matches(q,[p['fa'].lower()+" "+p['it'].lower()],cutoff=0.6)]
+    if not hits: await u.message.reply_text(m("SEARCH_NONE")); return
+    for pid,p in hits[:5]:
+        cap=f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی: {p['stock']}"
         btn=InlineKeyboardMarkup.from_button(InlineKeyboardButton("➕",callback_data=f"add_{pid}"))
         await u.message.reply_photo(p["image_url"],caption=cap,reply_markup=btn)
 
-# ───────────── Order Conversation
-NAME,PHONE,ADDR,POSTAL,NOTES = range(5)
-async def start_form(u:Update,ctx:ContextTypes.DEFAULT_TYPE):
+# ───────────── Order conversation
+NAME,PHONE,ADDR,POSTAL,NOTES=range(5)
+async def start_form(u,ctx):
     q=u.callback_query; dest=q.data.split("_")[1]; ctx.user_data["dest"]=dest
-    user=q.from_user
-    ctx.user_data["name"]=f"{user.first_name} {user.last_name or ''}".strip()
-    ctx.user_data["handle"]=f"@{user.username}" if user.username else "-"
-    await q.answer()
-    if ctx.user_data["name"]:
-        await q.message.reply_text(m("INPUT_PHONE")); return PHONE
-    await q.message.reply_text(m("INPUT_NAME")); return NAME
+    ctx.user_data["name"]=f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
+    ctx.user_data["handle"]=f"@{q.from_user.username}" if q.from_user.username else "-"
+    await q.message.reply_text(m("INPUT_PHONE")); return PHONE
 
-async def step_name(u,ctx): ctx.user_data["name"]=u.message.text; await u.message.reply_text(m("INPUT_PHONE")); return PHONE
 async def step_phone(u,ctx):
     if not ok_phone(u.message.text): await u.message.reply_text(m("PHONE_INVALID")); return PHONE
     ctx.user_data["phone"]=u.message.text; await u.message.reply_text(m("INPUT_ADDRESS")); return ADDR
 async def step_addr(u,ctx):
     if not ok_addr(u.message.text): await u.message.reply_text(m("ADDRESS_INVALID")); return ADDR
     ctx.user_data["address"]=u.message.text; await u.message.reply_text(m("INPUT_POSTAL")); return POSTAL
-async def step_postal(u,ctx): ctx.user_data["postal"]=u.message.text; await u.message.reply_text(m("INPUT_NOTES")); return NOTES
+async def step_postal(u,ctx):
+    ctx.user_data["postal"]=u.message.text; await u.message.reply_text(m("INPUT_NOTES")); return NOTES
 async def step_notes(u,ctx):
     ctx.user_data["notes"]=u.message.text or "-"
     cart=ctx.user_data.get("cart",[])
-    # -------- Save to Sheets --------
-    ts=dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    order_id=str(uuid.uuid4())[:8]
+    if not cart: await u.message.reply_text(m("CART_EMPTY")); return ConversationHandler.END
+    if not update_stock(cart):
+        await u.message.reply_text("❌ موجودی کافی نیست.",reply_markup=ReplyKeyboardRemove()); return ConversationHandler.END
+    order_id=str(uuid.uuid4())[:8]; ts=dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     for it in cart:
-        orders_ws.append_row([
-            ts,order_id,u.effective_user.id,ctx.user_data["handle"],
-            ctx.user_data["name"],ctx.user_data["phone"],ctx.user_data["address"],
-            ctx.user_data["dest"],it["id"],it["fa"],it["qty"],it["price"],it["qty"]*it["price"]
-        ])
-    # -------- Confirmation --------
+        orders_ws.append_row([ts,order_id,u.effective_user.id,ctx.user_data["handle"],
+                              ctx.user_data["name"],ctx.user_data["phone"],ctx.user_data["address"],
+                              ctx.user_data["dest"],it["id"],it["fa"],it["qty"],it["price"],it["qty"]*it["price"]])
     await u.message.reply_text(m("ORDER_CONFIRMED"),reply_markup=ReplyKeyboardRemove())
-    promo=MSG.get("PROMO_AFTER_ORDER")
-    if promo: await u.message.reply_text(promo,disable_web_page_preview=True)
     if ADMIN_ID:
-        total=cart_total(cart)
-        admin_msg=f"🆕 سفارش جدید {order_id}\nنام: {ctx.user_data['name']}\nمجموع: {total:.2f}€"
-        await u.get_bot().send_message(ADMIN_ID,admin_msg)
-    ctx.user_data.clear()
-    return ConversationHandler.END
-
+        msg=[f"🆕 سفارش {order_id}",f"{ctx.user_data['name']} — {cart_total(cart):.2f}€"]+\
+            [f"▫️ {i['qty']}× {i['fa']}" for i in cart]
+        await bot.send_message(ADMIN_ID,"\n".join(msg))
+    ctx.user_data.clear(); return ConversationHandler.END
 async def cancel(u,ctx): ctx.user_data.clear(); await u.message.reply_text(m("ORDER_CANCELLED"),reply_markup=ReplyKeyboardRemove()); return ConversationHandler.END
 
-# ───────────── Start & error handlers
+# ───────────── Commands
 async def cmd_start(u,ctx): await u.message.reply_html(m("WELCOME"),reply_markup=kb_main(ctx))
-async def error_handler(u,ctx): log.error("ERROR:",exc_info=ctx.error)
+
+# ───────────── FastAPI webhook
+api = FastAPI()
+tg_app=None
+@api.post("/webhook")
+async def wh(req:Request):
+    update=Update.de_json(await req.json(),tg_app.bot)
+    await tg_app.process_update(update)
+    return {"ok":True}
 
 def main():
-    app=ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start",cmd_start))
-    app.add_handler(CommandHandler("search",cmd_search))
-    # Form conversation
+    global tg_app,bot
+    tg_app=ApplicationBuilder().token(TOKEN).build()
+    bot=tg_app.bot
+    tg_app.add_handler(CommandHandler("start",cmd_start))
+    tg_app.add_handler(CommandHandler("search",cmd_search))
     conv=ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_form, pattern="^order_")],
-        states={NAME:[MessageHandler(filters.TEXT & ~filters.COMMAND,step_name)],
-                PHONE:[MessageHandler(filters.TEXT & ~filters.COMMAND,step_phone)],
-                ADDR:[MessageHandler(filters.TEXT & ~filters.COMMAND,step_addr)],
-                POSTAL:[MessageHandler(filters.TEXT & ~filters.COMMAND,step_postal)],
-                NOTES:[MessageHandler(filters.TEXT & ~filters.COMMAND,step_notes)]},
-        fallbacks=[CommandHandler("cancel",cancel)]
+        entry_points=[CallbackQueryHandler(start_form,pattern="^order_")],
+        states={
+            PHONE:[MessageHandler(filters.TEXT & ~filters.COMMAND,step_phone)],
+            ADDR :[MessageHandler(filters.TEXT & ~filters.COMMAND,step_addr)],
+            POSTAL:[MessageHandler(filters.TEXT & ~filters.COMMAND,step_postal)],
+            NOTES:[MessageHandler(filters.TEXT & ~filters.COMMAND,step_notes)],
+        },
+        fallbacks=[CommandHandler("cancel",cancel)],
+        per_message=True
     )
-    app.add_handler(conv)
-    app.add_handler(CallbackQueryHandler(router,pattern=".*"))
-    app.add_error_handler(error_handler)
-    app.run_polling()
+    tg_app.add_handler(conv)
+    tg_app.add_handler(CallbackQueryHandler(router))
+    tg_app.run_webhook(listen="0.0.0.0",port=PORT,url_path="/webhook",
+                       webhook_url=f"{BASE_URL}/webhook")
+    uvicorn.run(api,host="0.0.0.0",port=PORT)
 
 if __name__=="__main__":
     main()
