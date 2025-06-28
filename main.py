@@ -42,18 +42,32 @@ with open("messages.json", encoding="utf-8") as f:
     MSG = json.load(f)
 def m(key: str) -> str: return MSG.get(key, f"[{key}]")
 
-# ───────────── ENV
-TOKEN = os.getenv("TELEGRAM_TOKEN"); BASE_URL = os.getenv("BASE_URL")
+# ───────────── ENV & Sheets
+TOKEN       = os.getenv("TELEGRAM_TOKEN")
+ADMIN_ID    = int(os.getenv("ADMIN_CHAT_ID", "0"))
 SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
 PRODUCT_WS  = os.getenv("PRODUCT_WORKSHEET", "Sheet2")
-ADMIN_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
-CREDS_INFO = json.loads(os.getenv("GOOGLE_CREDS_JSON"))
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+# --- Google credentials ---
+#  روش دوم: استفاده از Secret File ذخیره‌شده در Render
+CREDS_PATH  = os.getenv("GOOGLE_CREDS", "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json")
+try:
+    with open(CREDS_PATH, "r", encoding="utf-8") as f:
+        CREDS_INFO = json.load(f)
+except FileNotFoundError:
+    raise SystemExit(f"❗️ فایل Google Credentials در {CREDS_PATH} یافت نشد. \
+مطمئن شو Secret File را در Render ایجاد کرده‌ای یا مسیر را در متغیر GOOGLE_CREDS تنظیم کرده‌ای.")
+
+# اتصال به Google Sheets
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
 gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(CREDS_INFO, scope))
 wb = gc.open(SPREADSHEET)
 orders_ws   = wb.sheet1
 products_ws = wb.worksheet(PRODUCT_WS)
+
 
 # ───────────── Load products
 def load_products() -> Dict[str, Dict[str, Any]]:
