@@ -632,7 +632,7 @@ def main():
             NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_notes)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True,  # Ensure all messages are tracked
+        per_message=False,  # Changed to False to avoid PTBUserWarning
     )
     app.add_handler(conv)
 
@@ -643,7 +643,9 @@ def main():
 
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
-    app.add_handler(error_handler)
+
+    # Register error handler correctly
+    app.add_error_handler(error_handler)
 
     port = int(os.getenv("PORT", "8080"))
     webhook_url = f"{BASE_URL}/{TOKEN}"
