@@ -4,7 +4,7 @@
   "ORDER_CANCELLED": "❌ سفارش لغو شد.\nOrdine annullato.",
   "PHONE_INVALID": "📵 شماره تلفن نامعتبر است. لطفاً با فرمت درست وارد کنید (مثلاً +39...).\nNumero di telefono non valido.",
   "ADDRESS_INVALID": "📍 آدرس خیلی کوتاه یا نامعتبر است. لطفاً کامل‌تر وارد کنید.\nIndirizzo troppo breve o non valido.",
-  "ERROR_SHEET": "❗️ خطا در ثبت سفارش. لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید.",
+  "ERROR_SHEET": "❗️ خطا در ثبت سفارش. لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید.\nErrore durante il salvataggio. Riprova o contatta il supporto.",
   "THANK_YOU": "✅ سفارش شما با موفقیت ثبت شد!\nGrazie per il tuo ordine!",
   "CART_ADDED": "✅ به سبد خرید افزوده شد.\nAggiunto al carrello.",
   "STOCK_EMPTY": "❌ این محصول در حال حاضر موجود نیست.\nProdotto esaurito al momento.",
@@ -15,5 +15,14 @@
   "INPUT_NOTES": "📝 اگر توضیح یا یادداشتی دارید بنویسید، در غیر این صورت /skip را بزنید.\nScrivi una nota se necessario, o premi /skip.",
   "ORDER_CONFIRMED": "📦 سفارش شما با موفقیت ثبت شد و در حال پردازش است.\nOrdine confermato e in elaborazione.",
   "ABOUT_US": "👋 ما خانوادهٔ بازارینو هستیم؛ پل کوچکی میان طعم‌های خانگی ایران و دوستانمان در ایتالیا. هر محصول را با وسواس انتخاب می‌کنیم تا اصالت، کیفیت و حس نوستالژی را یک‌جا به شما برسانیم.\n👋 Siamo la famiglia di Bazarino: un piccolo ponte tra i sapori di casa persiani e i nostri amici in Italia. Selezioniamo ogni prodotto con cura per offrirti autenticità, qualità e un pizzico di nostalgia.",
-  "PRIVACY": "🔒 اطلاعات شخصی شما فقط برای پردازش سفارش و بهبود خدمات استفاده می‌شود؛ هیچ‌گاه بدون رضایت، با شخص ثالثی به اشتراک گذاشته نمی‌شود.\n🔒 I tuoi dati vengono utilizzati esclusivamente per elaborare l’ordine e migliorare il servizio; non saranno mai condivisi con terzi senza il tuo consenso."
+  "PRIVACY": "🔒 اطلاعات شخصی شما فقط برای پردازش سفارش و بهبود خدمات استفاده می‌شود؛ هیچ‌گاه بدون رضایت، با شخص ثالثی به اشتراک گذاشته نمی‌شود.\n🔒 I tuoi dati vengono utilizzati esclusivamente per elaborare l’ordine e migliorare il servizio; non saranno mai condivisi con terzi senza il tuo consenso.",
+  "BTN_SEARCH": "🔍 جستجو / Cerca",
+  "SEARCH_USAGE": "🔎 لطفاً نام محصول مورد نظر را وارد کنید:\nInserisci il nome del prodotto da cercare:",
+  "SEARCH_NONE": "❌ هیچ محصولی با این نام یافت نشد.\nNessun prodotto trovato con questo nome.",
+  "BTN_CART": "🛒 مشاهده سبد خرید / Carrello",
+  "BTN_CONTINUE": "✔️ ادامه / Continua",
+  "BTN_BACK": "⬅️ بازگشت / Indietro",
+  "BTN_ORDER_PERUGIA": "📦 تحویل در پروجا / Consegna a Perugia",
+  "BTN_ORDER_ITALY": "🚚 ارسال به سراسر ایتالیا / Spedizione in tutta Italia",
+  "PROMO_AFTER_ORDER": "🎁 با استفاده از کد تخفیف <b>BAZAR10</b> در سفارش بعدی، ۱۰٪ تخفیف بگیرید!\nRicevi il 10% di sconto sul tuo prossimo ordine con il codice <b>BAZAR10</b>!"
 }
