@@ -104,7 +104,7 @@ EMOJI = {
 }
 
 # ───────────── Validators
-phone_re = re.compile(r"^\+?\d{8,15}$")
+phone_re = re.compile(r"^3\d{9}$")  # فقط شماره‌های ایتالیایی با 10 رقم (شروع با 3)
 ok_phone = lambda p: bool(phone_re.fullmatch(p.strip()))
 ok_addr = lambda a: len(a.strip()) > 10 and any(c.isdigit() for c in a)
 
@@ -149,11 +149,7 @@ def kb_category(cat, ctx):
 def kb_product(pid):
     p = get_products()[pid]
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ افزودن به سبد", callback_data=f"add_{pid}")],
-        [
-            InlineKeyboardButton("📦 پروجا", callback_data=f"order_perugia_{pid}"),
-            InlineKeyboardButton("🚚 ایتالیا", callback_data=f"order_italy_{pid}")
-        ],
+        [InlineKeyboardButton("➕ انتخاب تعداد", callback_data=f"add_{pid}")],
         [InlineKeyboardButton("⬅️ دسته قبل", callback_data=f"back_cat_{p['cat']}")]
     ])
 
@@ -167,6 +163,10 @@ def kb_cart(cart):
             InlineKeyboardButton("➖", callback_data=f"dec_{pid}"),
             InlineKeyboardButton("❌", callback_data=f"del_{pid}")
         ])
+    rows.append([
+        InlineKeyboardButton("📦 پروجا", callback_data=f"order_perugia"),
+        InlineKeyboardButton("🚚 ایتالیا", callback_data=f"order_italy")
+    ])
     rows.append([
         InlineKeyboardButton("✔️ ادامه", callback_data="checkout"),
         InlineKeyboardButton("⬅️ منو", callback_data="back")
@@ -191,6 +191,12 @@ async def add_cart(ctx, pid, qty=1):
         cart.append(dict(id=pid, fa=p["fa"], price=p["price"], weight=p["weight"], qty=qty))
     await alert_admin(pid, stock)
     return True, "✅ به سبد اضافه شد."
+
+async def select_quantity(ctx, pid):
+    kb = [[InlineKeyboardButton(str(i), callback_data=f"qty_{pid}_{i}") for i in range(1, 11)]]
+    kb.append([InlineKeyboardButton("❌ لغو", callback_data=f"cancel_qty_{pid}")])
+    await ctx.bot.send_message(chat_id=ctx.chat.id, text="تعداد مورد نظر را انتخاب کنید:",
+                             reply_markup=InlineKeyboardMarkup(kb))
 
 def fmt_cart(cart):
     if not cart:
@@ -249,8 +255,25 @@ async def router(update: Update, ctx):
                                      reply_markup=kb_product(pid), parse_mode="HTML")
         return
     if d.startswith("add_"):
-        ok, msg = await add_cart(ctx, d[4:])
+        pid = d[4:]
+        await select_quantity(ctx, pid)
+        return
+    if d.startswith("qty_"):
+        _, pid, qty = d.split("_")
+        qty = int(qty)
+        ok, msg = await add_cart(ctx, pid, qty)
         await q.answer(msg, show_alert=not ok)
+        await q.message.delete()  # حذف پیام "تعداد را انتخاب کنید" بعد از موفقیت
+        await safe_edit(q, fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+        return
+    if d.startswith("cancel_qty_"):
+        pid = d.split("_")[2]
+        await q.answer("افزودن به سبد لغو شد.")
+        await q.message.delete()  # حذف پیام "تعداد را انتخاب کنید" بعد از لغو
+        return
+    if d.startswith("back_cat_"):
+        cat = d.split("_")[2]
+        await safe_edit(q, EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx))
         return
     if d == "cart":
         await safe_edit(q, fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
@@ -269,6 +292,16 @@ async def router(update: Update, ctx):
             cart.remove(it)
         await safe_edit(q, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
         return
+    if d in ["order_perugia", "order_italy"]:
+        ctx.user_data["dest"] = "Perugia" if d == "order_perugia" else "Italy"
+        await q.message.reply_text("لطفاً برای ادامه، دکمه '✔️ ادامه' را بزنید.")
+        return
+    if d == "checkout":
+        if not ctx.user_data.get("dest"):
+            await q.answer("لطفاً مقصد (پروجا/ایتالیا) را انتخاب کنید.", show_alert=True)
+            return
+        await start_form(update, ctx)
+        return
 
 # ───────────── /search
 from difflib import get_close_matches
@@ -285,7 +318,7 @@ async def cmd_search(u, ctx):
         return
     for pid, p in hits[:5]:
         cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی: {p['stock']}"
-        btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton("➕", callback_data=f"add_{pid}"))
+        btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton("➕ انتخاب تعداد", callback_data=f"add_{pid}"))
         if p["image_url"] and p["image_url"].strip():
             await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
         else:
@@ -295,8 +328,10 @@ async def cmd_search(u, ctx):
 NAME, PHONE, ADDR, POSTAL, NOTES = range(5)
 async def start_form(u, ctx):
     q = u.callback_query
-    dest = q.data.split("_")[1]
-    ctx.user_data["dest"] = dest
+    dest = ctx.user_data.get("dest")
+    if not dest:
+        await q.answer("لطفاً از سبد خرید گزینه تحویل را انتخاب کنید.")
+        return
     ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
     ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
     await q.answer()
@@ -308,12 +343,12 @@ async def step_phone(u, ctx):
         await u.message.reply_text(m("PHONE_INVALID"))
         return PHONE
     ctx.user_data["phone"] = u.message.text
-    await u.message.reply_text(m("INPUT_ADDRESS"))
+    await u.message.reply_text(m("INPUT_ADDRESS") + " (حداقل 10 کاراکتر با یک عدد)")
     return ADDR
 
 async def step_addr(u, ctx):
     if not ok_addr(u.message.text):
-        await u.message.reply_text(m("ADDRESS_INVALID"))
+        await u.message.reply_text(m("ADDRESS_INVALID") + " (حداقل 10 کاراکتر با یک عدد وارد کنید)")
         return ADDR
     ctx.user_data["address"] = u.message.text
     await u.message.reply_text(m("INPUT_POSTAL"))
@@ -370,6 +405,12 @@ async def cancel(u, ctx):
 async def cmd_start(u, ctx):
     await u.message.reply_html(m("WELCOME"), reply_markup=kb_main(ctx))
 
+async def cmd_about(u, ctx):
+    await u.message.reply_text(m("ABOUT_US"), disable_web_page_preview=True)
+
+async def cmd_privacy(u, ctx):
+    await u.message.reply_text(m("PRIVACY"), disable_web_page_preview=True)
+
 # ───────────── App, webhook and FastAPI
 api = FastAPI()
 tg_app = ApplicationBuilder().token(TOKEN).build()
@@ -380,8 +421,10 @@ async def _on_startup():
     await tg_app.initialize()
     tg_app.add_handler(CommandHandler("start", cmd_start))
     tg_app.add_handler(CommandHandler("search", cmd_search))
+    tg_app.add_handler(CommandHandler("about", cmd_about))
+    tg_app.add_handler(CommandHandler("privacy", cmd_privacy))
     conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_form, pattern="^order_")],
+        entry_points=[CallbackQueryHandler(start_form, pattern="^checkout$")],
         states={
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_phone)],
             ADDR: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_addr)],
