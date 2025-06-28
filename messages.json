@@ -1,0 +1,17 @@
+{
+  "WELCOME": "🍇 **به بازارینو خوش آمدید!** 🇮🇷🇮🇹\n\nBenvenuto in **Bazarino**!\n\n🛒 فروشگاه آنلاین محصولات اصیل ایرانی در قلب پروجا\nIl tuo mini-market persiano a Perugia.\n\n🚚 تحویل همان‌روز در پروجا | giornata a Perugia\n📦 ارسال به سراسر ایتالیا با هماهنگی | in tutta Italia\n\n👇 یکی از دسته‌ها را انتخاب کنید و طعم خانه را سفارش دهید:\nScegli una categoria e assapora la tua casa 👇",
+  "CART_EMPTY": "🛒 سبد خرید شما خالی است.\nIl carrello è vuoto.",
+  "ORDER_CANCELLED": "❌ سفارش لغو شد.\nOrdine annullato.",
+  "PHONE_INVALID": "📵 شماره تلفن نامعتبر است. لطفاً با فرمت درست وارد کنید (مثلاً +39...).\nNumero di telefono non valido.",
+  "ADDRESS_INVALID": "📍 آدرس خیلی کوتاه یا نامعتبر است. لطفاً کامل‌تر وارد کنید.\nIndirizzo troppo breve o non valido.",
+  "ERROR_SHEET": "❗️ خطا در ثبت سفارش. لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید.",
+  "THANK_YOU": "✅ سفارش شما با موفقیت ثبت شد!\nGrazie per il tuo ordine!",
+  "CART_ADDED": "✅ به سبد خرید افزوده شد.\nAggiunto al carrello.",
+  "STOCK_EMPTY": "❌ این محصول در حال حاضر موجود نیست.\nProdotto esaurito al momento.",
+  "INPUT_NAME": "👤 لطفاً نام و نام خانوادگی خود را وارد کنید:\nInserisci il tuo nome e cognome:",
+  "INPUT_PHONE": "📞 لطفاً شماره تلفن خود را وارد کنید:\nInserisci il tuo numero di telefono:",
+  "INPUT_ADDRESS": "📍 لطفاً آدرس کامل تحویل را وارد کنید:\nInserisci l'indirizzo di consegna completo:",
+  "INPUT_POSTAL": "🏷 کدپستی را وارد کنید:\nInserisci il CAP:",
+  "INPUT_NOTES": "📝 اگر توضیح یا یادداشتی دارید بنویسید، در غیر این صورت /skip را بزنید.\nScrivi una nota se necessario, o premi /skip.",
+  "ORDER_CONFIRMED": "📦 سفارش شما با موفقیت ثبت شد و در حال پردازش است.\nOrdine confermato e in elaborazione."
+}
