@@ -382,8 +382,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("about", about_cmd))
     app.add_handler(CommandHandler("privacy", privacy_cmd))
-    app.add_handler(CallbackQueryHandler(router,
-         pattern="^(back_|cat_|prd_|add_|show_cart|clear_cart|checkout)$"))
+    app.add_handler(CallbackQueryHandler(
+        router,
+        pattern="^(back_|cat_|prd_|add_|show_cart|clear_cart|checkout|dest_).*$"))
+
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(router, pattern="^dest_")],
         states={
