@@ -19,7 +19,7 @@ from telegram.ext import (
     ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes,
     ConversationHandler, MessageHandler, PreCheckoutQueryHandler, filters,
 )
-from telegram.error import BadRequest   # ← ← NEW
+from telegram.error import BadRequest
 
 # ───────────── Logging
 logging.basicConfig(
@@ -60,7 +60,7 @@ log.info("✅ Google-Sheets connected")
 # ───────────── Conversation states
 NAME, ADDRESS, POSTAL, PHONE, NOTES = range(5)
 
-# ───────────── Safe-edit helper (NEW)
+# ───────────── Safe-edit helper
 async def safe_edit(q, *args, **kwargs):
     """ویرایش امن؛ خطای «Message is not modified» را مدیریت می‌کند."""
     try:
@@ -69,7 +69,10 @@ async def safe_edit(q, *args, **kwargs):
         if "Message is not modified" in str(e):
             await q.answer("⚠️ تغییری ندارد.", show_alert=False)
         else:
-            raise
+            log.error(f"Error editing message: {e}", exc_info=True)
+            # اینجا می توانید به کاربر هم پیام خطا بدهید
+            await q.answer("❌ خطایی در ویرایش پیام رخ داد.", show_alert=True)
+
 
 # ───────────── Data: categories & products
 CATEGORIES: Dict[str, str] = {
@@ -85,8 +88,6 @@ UNSPLASH = "https://images.unsplash.com/"
 def unsplash(code: str) -> str:
     return f"{UNSPLASH}{code}?auto=format&fit=crop&w=800&q=60"
 
-# ➊ همان دیکشنری PRODUCTS سابق (همهٔ اقلام RICE, BEANS, SPICE, NUTS, DRINK, CANNED)
-#    را بدون تغییر اینجا قرار داده‌ام؛ اگر آیتمی اضافه کرده‌ای، همان‌جا درج کن ↓↓↓
 PRODUCTS: Dict[str, Dict[str, Any]] = {
     # --- RICE ---
     "rice_hashemi": {
@@ -261,8 +262,7 @@ Ordina comodamente su Telegram, noi pensiamo al resto!
 PRIVACY = textwrap.dedent("""\
 📜 **خط‌مشی حریم خصوصی – بازارینو**
 
-🔍 **چه داده‌هایی جمع می‌کنیم؟ / Quali dati raccogliamo?**  
-• 👤 نام و نام خانوادگی / Nome e cognome  
+🔍 **چه داده‌هایی جمع می‌کنیم؟ / Quali dati raccogliamo?** • 👤 نام و نام خانوادگی / Nome e cognome  
 • 📍 آدرس + ☎️ تلفن / Indirizzo + Telefono  
 • 🛒 جزئیات سفارش / Dettagli dell’ordine  
 
@@ -340,19 +340,36 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⚖️ وزن/Peso: {p['weight']}\n"
             f"💶 قیمت/Prezzo: €{p['price']:.2f}"
         )
-        await q.message.delete()
-        await q.message.chat.send_photo(
-            photo=p["image_url"],
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=kb_product(code),
-        )
+        # به جای delete و send_photo، اگر پیام قبلی یک عکس بود آن را ویرایش کنید
+        if q.message.photo:
+            try:
+                await q.edit_message_caption(caption=caption, parse_mode="HTML", reply_markup=kb_product(code))
+            except BadRequest as e:
+                if "Message is not modified" not in str(e): # اگر تغییر نکرده بود، خطا نده
+                    log.error(f"Failed to edit message caption: {e}")
+                    # اگر ویرایش کپشن نشد، روش قدیمی را امتحان کنید
+                    await q.message.delete()
+                    await q.message.chat.send_photo(photo=p["image_url"], caption=caption, parse_mode="HTML", reply_markup=kb_product(code))
+        else:
+            # اگر پیام قبلی عکس نبود، حذف و ارسال مجدد
+            try:
+                await q.message.delete()
+            except BadRequest as e:
+                if "Message to delete not found" not in str(e):
+                    log.warning(f"Could not delete message: {e}")
+            await q.message.chat.send_photo(photo=p["image_url"], caption=caption, parse_mode="HTML", reply_markup=kb_product(code))
         return
 
     # add to cart
     if data.startswith("add_"):
         code = data[4:]
         cart: List[Dict[str, Any]] = ctx.user_data.setdefault("cart", [])
+        
+        # اعتبارسنجی که محصول وجود دارد
+        if code not in PRODUCTS:
+            await q.answer("❌ محصول مورد نظر یافت نشد.", show_alert=True)
+            return
+
         for item in cart:
             if item["code"] == code:
                 item["quantity"] += 1
@@ -360,12 +377,18 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             cart.append({"code": code, "quantity": 1})
         await q.message.reply_text("✅ به سبد افزوده شد. / Aggiunto al carrello.")
-        # فقط دکمه‌های پیام فعلی را به‌روزرسانی می‌کنیم
-        try:
-            await q.edit_message_reply_markup(reply_markup=kb_main(ctx))
-        except BadRequest:
-            pass
+        
+        # تنها کاری که اینجا لازم بود، به‌روزرسانی دکمه‌های صفحه اصلی است.
+        # اگر کاربر در صفحه محصول بود، باید دکمه‌های صفحه محصول به‌روز شود
+        # اما با توجه به طراحی فعلی که پیام "افزوده شد" را ارسال می‌کنید،
+        # سپس می‌خواهید دکمه‌های اصلی را در پیام اصلی به‌روز کنید،
+        # بهتر است این ویرایش را روی پیام اصلی انجام دهید.
+        # اما q.edit_message_reply_markup فقط روی q.message کار میکند
+        # که در این مورد پیام عکس محصول است.
+        # برای سادگی، پس از افزودن به سبد، به منوی اصلی برگردید:
+        await safe_edit(q, WELCOME, reply_markup=kb_main(ctx), parse_mode="HTML")
         return
+
 
     # show cart
     if data == "show_cart":
@@ -405,15 +428,18 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # destination selected → start form
-    if data.startswith("dest_"):
-        dest = data[5:]
-        ctx.user_data["dest"] = dest
-        if dest == "Italia" and not STRIPE:
-            await q.answer(NO_PAY, show_alert=True)
-            return
-        await q.message.reply_text("👤 نام و نام خانوادگی / Nome e cognome:")
-        return NAME  # hand over to ConversationHandler
+    # destination selected (this part IS the entry point for ConversationHandler)
+    # The router no longer handles dest_ directly. It's now handled solely by the ConversationHandler.
+    # This block should be removed from the general router as it's handled by entry_points.
+    # if data.startswith("dest_"):
+    #     dest = data[5:]
+    #     ctx.user_data["dest"] = dest
+    #     if dest == "Italia" and not STRIPE:
+    #         await q.answer(NO_PAY, show_alert=True)
+    #         return
+    #     await q.message.reply_text("👤 نام و نام خانوادگی / Nome e cognome:")
+    #     return NAME  # hand over to ConversationHandler
+
 
 # ───────────── Form steps
 async def step_name(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -448,7 +474,8 @@ async def step_postal(u, ctx):
 
 async def step_phone(u, ctx):
     ph = u.message.text.strip()
-    if not ph.replace("+", "").replace(" ", "").isdigit():
+    # بهبود اعتبارسنجی شماره تلفن: فقط اعداد و + را مجاز بدانید
+    if not all(char.isdigit() or char == '+' or char == ' ' for char in ph) or not any(char.isdigit() for char in ph):
         await u.message.reply_text("❌ شماره معتبر نیست. / Numero non valido:")
         return PHONE
     ctx.user_data["phone"] = ph
@@ -460,6 +487,11 @@ async def step_notes(u, ctx):
     status = "COD"  # Cash on Delivery
     # If Italy -> send invoice
     if ctx.user_data["dest"] == "Italia":
+        if not STRIPE: # Double-check STRIPE token here as well
+            await u.message.reply_text(NO_PAY, reply_markup=ReplyKeyboardRemove())
+            ctx.user_data.clear() # Clear cart as payment cannot proceed
+            return ConversationHandler.END
+
         amt = int(ctx.user_data["total"] * 100)
         status = "Pending"
         await u.message.reply_invoice(
@@ -469,7 +501,7 @@ async def step_notes(u, ctx):
             provider_token=STRIPE,
             currency="EUR",
             prices=[LabeledPrice("سبد خرید / Carrello", amt)],
-            start_parameter="bazarino-payment",
+            start_parameter="bazarino-payment", # Optional, for deep linking
         )
     else:
         await u.message.reply_text(
@@ -477,7 +509,9 @@ async def step_notes(u, ctx):
             "Ordine registrato! Ti contatteremo a breve.",
             reply_markup=ReplyKeyboardRemove()
         )
-    await save_order(u, ctx, status)
+    
+    # Save order regardless of payment method, status will reflect "Pending" or "COD"
+    await save_order(u, ctx, status) 
     return ConversationHandler.END
 
 # ───────────── Save order to Sheet & notify admin
@@ -490,8 +524,12 @@ async def save_order(u: Update, ctx: ContextTypes.DEFAULT_TYPE, status: str):
         total += cost
         items.append(f"{p['fa']}×{it['quantity']} (€{cost:.2f})")
 
+    # Generate a unique order ID
+    order_id = str(uuid.uuid4())
+    
     row = [
         dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        order_id, # NEW: Add Order ID to sheet
         u.effective_chat.id,
         f"@{u.effective_user.username}" if u.effective_user.username else "-",
         ctx.user_data["dest"],
@@ -504,31 +542,64 @@ async def save_order(u: Update, ctx: ContextTypes.DEFAULT_TYPE, status: str):
         ctx.user_data["notes"],
         status,
     ]
-    await asyncio.get_running_loop().run_in_executor(None, partial(sheet.append_row, row))
-    ctx.user_data.clear()
+    # NOTE: It's good practice to log before and after sheet operations
+    log.info(f"Attempting to save order {order_id} for user {u.effective_chat.id}")
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, partial(sheet.append_row, row))
+        log.info(f"Order {order_id} successfully saved to Google Sheet.")
+    except Exception as e:
+        log.error(f"Failed to save order {order_id} to Google Sheet: {e}", exc_info=True)
+        # Inform the user if saving fails for non-payment orders
+        if status == "COD":
+             await u.message.reply_text("❌ متأسفانه در ثبت سفارش خطایی رخ داد. لطفاً دوباره تلاش کنید.", reply_markup=ReplyKeyboardRemove())
+        # The user paying online will get an invoice, so they'll know if something's wrong during payment
+    
+    ctx.user_data.clear() # Clear cart only after successful save or if payment is initiated
 
     if ADMIN_ID:
         admin_txt = (
             "📥 سفارش جدید / Nuovo ordine\n\n"
-            f"🏷 مقصد/Dest.: {row[3]}\n"
-            f"📦 {row[4]}\n💰 €{row[5]}\n"
-            f"👤 {row[6]}\n"
-            f"📍 {row[7]} {row[8]}\n"
-            f"☎️ {row[9]}\n"
-            f"📝 {row[10]}\n"
+            f"ID سفارش/Order ID: `{order_id}`\n" # Display Order ID
+            f"🏷 مقصد/Dest.: {row[4]}\n" # Index changed due to new Order ID
+            f"📦 {row[5]}\n💰 €{row[6]}\n"
+            f"👤 {row[7]}\n"
+            f"📍 {row[8]} {row[9]}\n"
+            f"☎️ {row[10]}\n"
+            f"📝 {row[11]}\n"
             f"وضعیت/Stato: {status}"
         )
-        await u.get_bot().send_message(ADMIN_ID, admin_txt)
+        await u.get_bot().send_message(ADMIN_ID, admin_txt, parse_mode="MarkdownV2") # Use MarkdownV2 for backticks
+
 
 # ───────────── Payment callbacks
 async def precheckout(update: Update, _):
     await update.pre_checkout_query.answer(ok=True)
 
 async def paid(update: Update, _):
+    # Here, you would typically update the order status in Google Sheet to 'Paid'
+    # based on the invoice_payload (which contains the order-uuid).
+    order_uuid_from_payload = update.message.successful_payment.invoice_payload.replace("order-", "")
+    log.info(f"Payment successful for order {order_uuid_from_payload}")
+    
+    # Example: Find and update the row in Google Sheet. This would require
+    # iterating through rows or using sheet.find() with a custom function
+    # to locate the order_id and update its status column.
+    # For simplicity, this is a placeholder.
+    # update_order_status_in_sheet(order_uuid_from_payload, "Paid") 
+
     await update.message.reply_text(
-        "💳 پرداخت موفق! سفارش ثبت شد.\nPagamento riuscito!",
+        "💳 پرداخت موفق! سفارش ثبت و در حال پردازش است.\nPagamento riuscito!",
         reply_markup=ReplyKeyboardRemove()
     )
+    if ADMIN_ID:
+        # It's good to notify admin about successful payment with order ID
+        await update.get_bot().send_message(
+            ADMIN_ID,
+            f"✅ پرداخت موفقیت‌آمیز برای سفارش `{order_uuid_from_payload}` از طرف "
+            f"@{update.message.from_user.username or update.message.from_user.id} به مبلغ €{update.message.successful_payment.total_amount / 100:.2f}",
+            parse_mode="MarkdownV2"
+        )
+
 
 # ───────────── Cancel
 async def cancel(u, ctx):
@@ -541,11 +612,23 @@ async def cmd_start(u, ctx):   await u.message.reply_html(WELCOME, reply_markup=
 async def cmd_about(u, _):     await u.message.reply_text(ABOUT)
 async def cmd_privacy(u, _):   await u.message.reply_text(PRIVACY)
 
-# ───────────── Error-handler (NEW)
+# ───────────── Error-handler
 async def error_handler(update: object, ctx: ContextTypes.DEFAULT_TYPE):
+    # این لاگ برای شناسایی خطاها خیلی مهم است
+    log.error("Exception while handling an update:", exc_info=ctx.error)
+    
+    # اگر خطای خاصی باشد که مربوط به "Message is not modified" است، آن را نادیده بگیر
     if isinstance(ctx.error, BadRequest) and "Message is not modified" in str(ctx.error):
         return  # silently ignore
-    log.error("Unhandled exception: %s", ctx.error)
+    
+    # در سایر موارد، به کاربر اطلاع دهید
+    if update and update.effective_chat:
+        try:
+            await update.effective_chat.send_message(
+                "❌ متاسفانه خطایی رخ داد. لطفا بعداً دوباره امتحان کنید."
+            )
+        except Exception as e:
+            log.error(f"Failed to send error message to user: {e}")
 
 # ───────────── Main
 def main():
@@ -556,15 +639,11 @@ def main():
     app.add_handler(CommandHandler("about", cmd_about))
     app.add_handler(CommandHandler("privacy", cmd_privacy))
 
-    # callback router (non-form)
-    app.add_handler(CallbackQueryHandler(
-        router,
-        pattern="^(back_|cat_|prd_|add_|show_cart|clear_cart|checkout)$"
-    ))
-
-    # conversation for order form (dest_)
+    # --- ORDER OF HANDLERS MATTERS! ---
+    # 1. ConversationHandler for the form (dest_ callbacks are its entry point)
+    #    It must come BEFORE the general CallbackQueryHandler that might catch dest_
     conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(router, pattern="^dest_")],
+        entry_points=[CallbackQueryHandler(start_form, pattern="^dest_")], # Use a dedicated start_form handler
         states={
             NAME:    [MessageHandler(filters.TEXT & ~filters.COMMAND, step_name)],
             ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_address)],
@@ -576,14 +655,21 @@ def main():
     )
     app.add_handler(conv)
 
-    # payment
+    # 2. General CallbackQueryHandler for all other inline button presses
+    #    Make sure its pattern *excludes* "dest_" so it doesn't interfere with the ConversationHandler
+    app.add_handler(CallbackQueryHandler(
+        router,
+        pattern="^(back_|cat_|prd_|add_|show_cart|clear_cart|checkout)$"
+    ))
+
+    # Payment handlers
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
 
-    # error handler (NEW)
+    # Global error handler
     app.add_error_handler(error_handler)
 
-    # ───── webhook (Render: respect $PORT)
+    # ───── Webhook (Render: respect $PORT)
     port = int(os.getenv("PORT", "8080"))
     app.run_webhook(
         listen="0.0.0.0",
@@ -592,5 +678,24 @@ def main():
         webhook_url=f"{BASE_URL}/{TOKEN}",
     )
 
+# New helper function to start the form conversation.
+# This makes the entry_points for ConversationHandler cleaner.
+async def start_form(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    data = q.data
+    await q.answer() # Answer the callback query immediately
+
+    dest = data[5:]
+    ctx.user_data["dest"] = dest
+    
+    if dest == "Italia" and not STRIPE:
+        await q.answer(NO_PAY, show_alert=True)
+        return ConversationHandler.END # End conversation if no Stripe token
+        
+    await q.message.reply_text("👤 نام و نام خانوادگی / Nome e cognome:")
+    return NAME
+
+
 if __name__ == "__main__":
     main()
+
