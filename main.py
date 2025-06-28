@@ -242,10 +242,10 @@ async def router(update: Update, ctx):
         p = get_products()[pid]
         cap = f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\n{p['price']}€ / {p['weight']}\nموجودی: {p['stock']}"
         if p["image_url"] and p["image_url"].strip():
-            await ctx.bot.send_photo(chat_id=q.message.chat_id, photo=p["image_url"], caption=cap,
+            await ctx.bot.send_photo(chat_id=q.message.chat.id, photo=p["image_url"], caption=cap,
                                    reply_markup=kb_product(pid), parse_mode="HTML")
         else:
-            await ctx.bot.send_message(chat_id=q.message.chat_id, text=cap,
+            await ctx.bot.send_message(chat_id=q.message.chat.id, text=cap,
                                      reply_markup=kb_product(pid), parse_mode="HTML")
         return
     if d.startswith("add_"):
