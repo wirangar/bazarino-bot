@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bazarino Telegram Bot – FINAL (Webhook)
-- Dynamic products from Google Sheets with 15-sec cache
-- Stock check + low-stock alert to admin (configurable threshold)
-- Rich cart UI with + / – / ❌
-- /search command
-- Order buttons (Perugia / Italy)
-- Order form with auto-prefill name & username
-- Structured order saving to Google Sheets with stock update
-- Confirmation message to user and admin
-- Optional promo message (PROMO_AFTER_ORDER) from messages.json
-- Webhook support for Render.com Web Service deployment
+Bazarino Telegram Bot – FINAL (Webhook via FastAPI on Render)
+- Dynamic products from Google Sheets (15-sec cache)
+- Rich cart UI + /search + bilingual menus
+- Order form with full stock update, admin alert, promo message
+- Webhook initialized properly via FastAPI `startup` event
+- Optimized for Render.com Web Service deployment
 
 Note for Render.com deployment:
 - Set service type to 'Web Service' in Render dashboard
@@ -123,17 +118,20 @@ async def safe_edit(q, *a, **k):
     except BadRequest as e:
         if "not modified" in str(e):
             return
-        log.error(f"Error editing message: {e}")
+        log.error(f"Edit msg error: {e}")
     except NetworkError as e:
-        log.error(f"Network error while editing message: {e}")
+        log.error(f"Network error: {e}")
 
 async def alert_admin(pid, stock):
     if stock <= LOW_STOCK_TH and ADMIN_ID:
-        try:
-            await bot.send_message(ADMIN_ID, f"⚠️ موجودی کم {stock}: {get_products()[pid]['fa']}")
-            log.info(f"Low stock alert sent for {get_products()[pid]['fa']} (stock: {stock})")
-        except Exception as e:
-            log.error(f"Failed to send low stock alert: {e}")
+        for _ in range(3):  # Retry 3 times
+            try:
+                await bot.send_message(ADMIN_ID, f"⚠️ موجودی کم {stock}: {get_products()[pid]['fa']}")
+                log.info(f"Low stock alert sent for {get_products()[pid]['fa']}")
+                break
+            except Exception as e:
+                log.error(f"Alert fail attempt: {e}")
+                await asyncio.sleep(1)  # Wait before retry
 
 # ───────────── Keyboards
 def kb_main(ctx):
@@ -364,37 +362,14 @@ async def cancel(u, ctx):
 async def cmd_start(u, ctx):
     await u.message.reply_html(m("WELCOME"), reply_markup=kb_main(ctx))
 
-# ───────────── FastAPI webhook
+# ───────────── App, webhook and FastAPI
 api = FastAPI()
-tg_app = None
-bot = None
+tg_app = ApplicationBuilder().token(TOKEN).build()
+bot = tg_app.bot
 
-@api.post("/webhook")
-async def wh(req: Request):
-    try:
-        update = Update.de_json(await req.json(), tg_app.bot)
-        if not update:
-            log.error("Invalid webhook update received")
-            raise HTTPException(status_code=400, detail="Invalid update")
-        await tg_app.process_update(update)
-        return {"ok": True}
-    except Exception as e:
-        log.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-async def set_webhook():
-    webhook_url = f"{BASE_URL}/webhook"
-    try:
-        await tg_app.bot.set_webhook(webhook_url)
-        log.info(f"Webhook set to {webhook_url}")
-    except Exception as e:
-        log.error(f"Failed to set webhook: {e}")
-        raise SystemExit(f"❗️ خطا در تنظیم webhook: {e}")
-
-def main():
-    global tg_app, bot
-    tg_app = ApplicationBuilder().token(TOKEN).build()
-    bot = tg_app.bot
+@api.on_event("startup")
+async def _on_startup():
+    await tg_app.initialize()
     tg_app.add_handler(CommandHandler("start", cmd_start))
     tg_app.add_handler(CommandHandler("search", cmd_search))
     conv = ConversationHandler(
@@ -410,8 +385,24 @@ def main():
     )
     tg_app.add_handler(conv)
     tg_app.add_handler(CallbackQueryHandler(router))
-    # Run webhook in async context
-    asyncio.run(set_webhook())
+    webhook_url = f"{BASE_URL}/webhook"
+    await tg_app.bot.set_webhook(webhook_url)
+    log.info(f"Webhook set to {webhook_url}")
+
+@api.post("/webhook")
+async def wh(req: Request):
+    try:
+        update = Update.de_json(await req.json(), tg_app.bot)
+        if not update:
+            log.error("Invalid webhook update received")
+            raise HTTPException(status_code=400, detail="Invalid update")
+        await tg_app.process_update(update)
+        return {"ok": True}
+    except Exception as e:
+        log.error(f"Webhook error: {e}")
+        raise HTTPException(status_code=500, detail="Internal error")
+
+def main():
     uvicorn.run(api, host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
