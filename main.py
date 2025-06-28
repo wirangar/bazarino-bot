@@ -4,7 +4,6 @@
 Bazarino Telegram Bot – FINAL (Farsi 🇮🇷 / Italiano 🇮🇹)
 سبد چندمحصولی • Google Sheets • Stripe • Unsplash images
 """
-
 from __future__ import annotations
 import asyncio, datetime as dt, json, logging, os, textwrap, uuid
 from functools import partial
@@ -20,6 +19,7 @@ from telegram.ext import (
     ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes,
     ConversationHandler, MessageHandler, PreCheckoutQueryHandler, filters,
 )
+from telegram.error import BadRequest   # ← ← NEW
 
 # ───────────── Logging
 logging.basicConfig(
@@ -60,6 +60,17 @@ log.info("✅ Google-Sheets connected")
 # ───────────── Conversation states
 NAME, ADDRESS, POSTAL, PHONE, NOTES = range(5)
 
+# ───────────── Safe-edit helper (NEW)
+async def safe_edit(q, *args, **kwargs):
+    """ویرایش امن؛ خطای «Message is not modified» را مدیریت می‌کند."""
+    try:
+        await q.edit_message_text(*args, **kwargs)
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            await q.answer("⚠️ تغییری ندارد.", show_alert=False)
+        else:
+            raise
+
 # ───────────── Data: categories & products
 CATEGORIES: Dict[str, str] = {
     "rice":   "🍚 برنج / Riso",
@@ -71,11 +82,11 @@ CATEGORIES: Dict[str, str] = {
 }
 
 UNSPLASH = "https://images.unsplash.com/"
-
 def unsplash(code: str) -> str:
-    """برگرداندن لینک عکس placeholder از Unsplash"""
     return f"{UNSPLASH}{code}?auto=format&fit=crop&w=800&q=60"
 
+# ➊ همان دیکشنری PRODUCTS سابق (همهٔ اقلام RICE, BEANS, SPICE, NUTS, DRINK, CANNED)
+#    را بدون تغییر اینجا قرار داده‌ام؛ اگر آیتمی اضافه کرده‌ای، همان‌جا درج کن ↓↓↓
 PRODUCTS: Dict[str, Dict[str, Any]] = {
     # --- RICE ---
     "rice_hashemi": {
@@ -92,7 +103,6 @@ PRODUCTS: Dict[str, Dict[str, Any]] = {
         "weight": "1 kg", "price": 5.50,
         "image_url": unsplash("photo-1572501535324-b336c9b5fb44"),
     },
-
     # --- BEANS ---
     "beans_lentil": {
         "cat": "beans", "fa": "عدس سبز", "it": "Lenticchie verdi",
@@ -115,7 +125,6 @@ PRODUCTS: Dict[str, Dict[str, Any]] = {
         "weight": "1 kg", "price": 3.80,
         "image_url": unsplash("photo-1608515171304-28045997d813"),
     },
-
     # --- SPICE ---
     "spice_mint": {
         "cat": "spice", "fa": "نعناع خشک", "it": "Menta secca",
@@ -145,7 +154,6 @@ PRODUCTS: Dict[str, Dict[str, Any]] = {
         "weight": "0.5 g", "price": 6.00,
         "image_url": unsplash("photo-1601315577115-3b0a639f6a22"),
     },
-
     # --- NUTS ---
     "nuts_pistachio": {
         "cat": "nuts", "fa": "پسته احمدآقایی", "it": "Pistacchio",
@@ -175,7 +183,6 @@ PRODUCTS: Dict[str, Dict[str, Any]] = {
         "weight": "300 g", "price": 3.90,
         "image_url": unsplash("photo-1606041008023-478ec111c000"),
     },
-
     # --- DRINK ---
     "drink_dough_abali": {
         "cat": "drink", "fa": "دوغ آبعلی", "it": "Doogh Abali",
@@ -198,7 +205,6 @@ PRODUCTS: Dict[str, Dict[str, Any]] = {
         "weight": "1.5 L", "price": 2.90,
         "image_url": unsplash("photo-1620943100637-d731c9fe3314"),
     },
-
     # --- CANNED ---
     "can_fruit_mix": {
         "cat": "canned", "fa": "کمپوت میوه مخلوط", "it": "Macedonia",
@@ -276,7 +282,8 @@ def cart_count(ctx) -> int:
 def kb_main(ctx) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(lbl, callback_data=f"cat_{key}")]
             for key, lbl in CATEGORIES.items()]
-    cart_btn = ("🛒 سبد خرید (%d) / Carrello" % cart_count(ctx)) if cart_count(ctx) else "🛒 سبد خرید / Carrello"
+    cart_btn = (f"🛒 سبد خرید ({cart_count(ctx)}) / Carrello"
+                if cart_count(ctx) else "🛒 سبد خرید / Carrello")
     rows.append([InlineKeyboardButton(cart_btn, callback_data="show_cart")])
     return InlineKeyboardMarkup(rows)
 
@@ -307,19 +314,19 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # back to main
     if data == "back_main":
-        await q.edit_message_text(WELCOME, reply_markup=kb_main(ctx), parse_mode="HTML")
+        await safe_edit(q, WELCOME, reply_markup=kb_main(ctx), parse_mode="HTML")
         return
 
     # back to category
     if data.startswith("back_"):
         cat = data[5:]
-        await q.edit_message_text(CATEGORIES[cat], reply_markup=kb_category(cat, ctx))
+        await safe_edit(q, CATEGORIES[cat], reply_markup=kb_category(cat, ctx))
         return
 
     # open a category
     if data.startswith("cat_"):
         cat = data[4:]
-        await q.edit_message_text(CATEGORIES[cat], reply_markup=kb_category(cat, ctx))
+        await safe_edit(q, CATEGORIES[cat], reply_markup=kb_category(cat, ctx))
         return
 
     # open product card
@@ -356,7 +363,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # فقط دکمه‌های پیام فعلی را به‌روزرسانی می‌کنیم
         try:
             await q.edit_message_reply_markup(reply_markup=kb_main(ctx))
-        except:  # در صورتی که پیام قدیمی باشد
+        except BadRequest:
             pass
         return
 
@@ -364,7 +371,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if data == "show_cart":
         cart = ctx.user_data.get("cart", [])
         if not cart:
-            await q.edit_message_text(CART_EMPTY, reply_markup=kb_main(ctx))
+            await safe_edit(q, CART_EMPTY, reply_markup=kb_main(ctx))
             return
         total, text = 0.0, "🛒 <b>سبد خرید / Carrello:</b>\n"
         for item in cart:
@@ -374,13 +381,13 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             text += f"• {p['fa']} × {item['quantity']} = €{cost:.2f}\n"
         text += f"\n<b>مجموع / Totale: €{total:.2f}</b>"
         ctx.user_data["total"] = total
-        await q.edit_message_text(text, parse_mode="HTML", reply_markup=kb_cart())
+        await safe_edit(q, text, parse_mode="HTML", reply_markup=kb_cart())
         return
 
     # clear cart
     if data == "clear_cart":
         ctx.user_data.clear()
-        await q.edit_message_text("🗑️ سبد خرید خالی شد. / Carrello svuotato.", reply_markup=kb_main(ctx))
+        await safe_edit(q, "🗑️ سبد خرید خالی شد. / Carrello svuotato.", reply_markup=kb_main(ctx))
         return
 
     # checkout – choose destination
@@ -388,7 +395,8 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not ctx.user_data.get("cart"):
             await q.answer("سبد خالی است.", show_alert=True)
             return
-        await q.edit_message_text(
+        await safe_edit(
+            q,
             "نحوهٔ تحویل و پرداخت را انتخاب کنید:\nScegli modalità di consegna/pagamento:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🛒 پروجا (نقدی) / Perugia (contanti)", callback_data="dest_Perugia")],
@@ -533,6 +541,12 @@ async def cmd_start(u, ctx):   await u.message.reply_html(WELCOME, reply_markup=
 async def cmd_about(u, _):     await u.message.reply_text(ABOUT)
 async def cmd_privacy(u, _):   await u.message.reply_text(PRIVACY)
 
+# ───────────── Error-handler (NEW)
+async def error_handler(update: object, ctx: ContextTypes.DEFAULT_TYPE):
+    if isinstance(ctx.error, BadRequest) and "Message is not modified" in str(ctx.error):
+        return  # silently ignore
+    log.error("Unhandled exception: %s", ctx.error)
+
 # ───────────── Main
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
@@ -565,6 +579,9 @@ def main():
     # payment
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
+
+    # error handler (NEW)
+    app.add_error_handler(error_handler)
 
     # ───── webhook (Render: respect $PORT)
     port = int(os.getenv("PORT", "8080"))
