@@ -81,7 +81,7 @@ def load_products() -> Dict[str, Dict[str, Any]]:
             r["id"]: dict(
                 cat=r["cat"], fa=r["fa"], it=r["it"], brand=r["brand"],
                 desc=r["description"], weight=r["weight"],
-                price=float(r["price"]), image_url=r["image_url"],
+                price=float(r["price"]), image_url=r["image_url"] or None,
                 stock=int(r.get("stock", 0))
             ) for r in products_ws.get_all_records()
         }
@@ -241,7 +241,12 @@ async def router(update: Update, ctx):
         pid = d[5:]
         p = get_products()[pid]
         cap = f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\n{p['price']}€ / {p['weight']}\nموجودی: {p['stock']}"
-        await q.message.answer_photo(p["image_url"], caption=cap, reply_markup=kb_product(pid), parse_mode="HTML")
+        if p["image_url"] and p["image_url"].strip():
+            await ctx.bot.send_photo(chat_id=q.message.chat_id, photo=p["image_url"], caption=cap,
+                                   reply_markup=kb_product(pid), parse_mode="HTML")
+        else:
+            await ctx.bot.send_message(chat_id=q.message.chat_id, text=cap,
+                                     reply_markup=kb_product(pid), parse_mode="HTML")
         return
     if d.startswith("add_"):
         ok, msg = await add_cart(ctx, d[4:])
@@ -281,7 +286,10 @@ async def cmd_search(u, ctx):
     for pid, p in hits[:5]:
         cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی: {p['stock']}"
         btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton("➕", callback_data=f"add_{pid}"))
-        await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
+        if p["image_url"] and p["image_url"].strip():
+            await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
+        else:
+            await u.message.reply_text(cap, reply_markup=btn)
 
 # ───────────── Order conversation
 NAME, PHONE, ADDR, POSTAL, NOTES = range(5)
