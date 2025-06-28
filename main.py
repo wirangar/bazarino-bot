@@ -104,8 +104,8 @@ EMOJI = {
 }
 
 # ───────────── Validators
-phone_re = re.compile(r"^3\d{9}$")  # فقط شماره‌های ایتالیایی با 10 رقم (شروع با 3)
-ok_phone = lambda p: bool(phone_re.fullmatch(p.strip()))
+phone_re = re.compile(r"^\+?\d[\d\s\-]{6,}$")  # شماره‌های بین‌المللی با کد کشور یا بدون کد (حداقل 7 رقم)
+ok_phone = lambda p: bool(phone_re.fullmatch(p.strip().replace(" ", "").replace("-", "")))
 ok_addr = lambda a: len(a.strip()) > 10 and any(c.isdigit() for c in a)
 
 # ───────────── Helpers
@@ -149,7 +149,7 @@ def kb_category(cat, ctx):
 def kb_product(pid):
     p = get_products()[pid]
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ انتخاب تعداد", callback_data=f"add_{pid}")],
+        [InlineKeyboardButton("➕ افزودن سریع + بازگشت به دسته", callback_data=f"add_{pid}")],
         [InlineKeyboardButton("⬅️ دسته قبل", callback_data=f"back_cat_{p['cat']}")]
     ])
 
@@ -191,12 +191,6 @@ async def add_cart(ctx, pid, qty=1):
         cart.append(dict(id=pid, fa=p["fa"], price=p["price"], weight=p["weight"], qty=qty))
     await alert_admin(pid, stock)
     return True, "✅ به سبد اضافه شد."
-
-async def select_quantity(ctx, pid):
-    kb = [[InlineKeyboardButton(str(i), callback_data=f"qty_{pid}_{i}") for i in range(1, 11)]]
-    kb.append([InlineKeyboardButton("❌ لغو", callback_data=f"cancel_qty_{pid}")])
-    await ctx.bot.send_message(chat_id=ctx.chat.id, text="تعداد مورد نظر را انتخاب کنید:",
-                             reply_markup=InlineKeyboardMarkup(kb))
 
 def fmt_cart(cart):
     if not cart:
@@ -256,24 +250,21 @@ async def router(update: Update, ctx):
         return
     if d.startswith("add_"):
         pid = d[4:]
-        await select_quantity(ctx, pid)
-        return
-    if d.startswith("qty_"):
-        _, pid, qty = d.split("_")
-        qty = int(qty)
-        ok, msg = await add_cart(ctx, pid, qty)
+        ok, msg = await add_cart(ctx, pid, qty=1)  # افزودن با مقدار پیش‌فرض 1
         await q.answer(msg, show_alert=not ok)
-        await q.message.delete()  # حذف پیام "تعداد را انتخاب کنید" بعد از موفقیت
-        await safe_edit(q, fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
-        return
-    if d.startswith("cancel_qty_"):
-        pid = d.split("_")[2]
-        await q.answer("افزودن به سبد لغو شد.")
-        await q.message.delete()  # حذف پیام "تعداد را انتخاب کنید" بعد از لغو
+        cat = get_products()[pid]["cat"]
+        await safe_edit(q, EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx))
         return
     if d.startswith("back_cat_"):
         cat = d.split("_")[2]
-        await safe_edit(q, EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx))
+        try:
+            await safe_edit(q, EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx))
+        except Exception as e:
+            log.error(f"Error editing message text for back_cat_: {e}")
+            try:
+                await q.edit_message_caption(caption=EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx))
+            except Exception as e:
+                log.error(f"Error editing message caption for back_cat_: {e}")
         return
     if d == "cart":
         await safe_edit(q, fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
@@ -318,7 +309,7 @@ async def cmd_search(u, ctx):
         return
     for pid, p in hits[:5]:
         cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی: {p['stock']}"
-        btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton("➕ انتخاب تعداد", callback_data=f"add_{pid}"))
+        btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton("➕ افزودن سریع + بازگشت به دسته", callback_data=f"add_{pid}"))
         if p["image_url"] and p["image_url"].strip():
             await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
         else:
@@ -335,13 +326,13 @@ async def start_form(u, ctx):
     ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
     ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
     await q.answer()
-    await q.message.reply_text(m("INPUT_PHONE") + "\n📞 راهنما: لطفاً شماره تلفن ایتالیایی (شروع با 3 و 10 رقم، مثلاً 3101234567) وارد کنید.")
+    await q.message.reply_text(m("INPUT_PHONE") + "\n📞 راهنما: لطفاً شماره تلفن (با کد کشور مثل +39123456789 یا بدون کد مثل 0123456789) وارد کنید.")
     return PHONE
 
 async def step_phone(u, ctx):
     log.info(f"Received phone: {u.message.text}")  # اضافه کردن لاگ برای دیباگ
     if not ok_phone(u.message.text):
-        await u.message.reply_text("❌ شماره تلفن نامعتبر است!\n📞 لطفاً یک شماره تلفن ایتالیایی معتبر (شروع با 3 و 10 رقم، مثلاً 3101234567) وارد کنید.")
+        await u.message.reply_text("❌ شماره تلفن نامعتبر است!\n📞 لطفاً شماره تلفن معتبر (با کد کشور مثل +39123456789 یا بدون کد مثل 0123456789) وارد کنید.")
         return PHONE
     ctx.user_data["phone"] = u.message.text
     await u.message.reply_text(m("INPUT_ADDRESS") + " (حداقل 10 کاراکتر با یک عدد)")
