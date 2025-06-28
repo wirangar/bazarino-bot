@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bazarino Telegram Bot – FINAL (Webhook via FastAPI on Render)
+Bazarino Telegram Bot – FINAL (Comprehensive)
+- Webhook via FastAPI on Render
 - Dynamic products from Google Sheets (15-sec cache)
-- Rich cart UI + /search + bilingual menus
-- Order form with full stock update, admin alert, promo message
-- Webhook initialized properly via FastAPI `startup` event
-- Optimized for Render.com Web Service deployment
-
-Note for Render.com deployment:
-- Set service type to 'Web Service' in Render dashboard
-- Ensure BASE_URL is set to the public URL (e.g., https://your-service.onrender.com)
-- Required env vars: TELEGRAM_TOKEN, ADMIN_CHAT_ID, GOOGLE_CREDS, BASE_URL
-- Optional env vars: SPREADSHEET_NAME, PRODUCT_WORKSHEET, LOW_STOCK_THRESHOLD, PORT
-- Secret file: Upload Google credentials JSON to /etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json
-- Ensure stock column in Google Sheets is in column J (10); adjust update_stock() if different
+- Rich cart UI + search + bilingual menus
+- Structured order process with ConversationHandler
+- Stock update, admin alerts, and order confirmation
 """
 
 from __future__ import annotations
-import asyncio, datetime as dt, json, logging, os, re, uuid
+import asyncio, datetime as dt, json, logging, os, uuid
 from typing import Dict, Any, List
 
 import gspread
@@ -37,7 +29,7 @@ from telegram.error import BadRequest, NetworkError
 # ───────────── Logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    format="%(asctime)s | %(levelname)s | %(message)s",
 )
 log = logging.getLogger("bazarino")
 
@@ -102,11 +94,6 @@ EMOJI = {
     "nuts": "🥜 خشکبار / Frutta secca", "drink": "🧃 نوشیدنی / Bevande",
     "canned": "🥫 کنسرو / Conserve", "sweet": "🍬 شیرینی / Dolci"
 }
-
-# ───────────── Validators
-phone_re = re.compile(r"^\+?\d[\d\s\-]{6,}$")  # شماره‌های بین‌المللی با کد کشور یا بدون کد (حداقل 7 رقم)
-ok_phone = lambda p: bool(phone_re.fullmatch(p.strip().replace(" ", "").replace("-", "")))
-ok_addr = lambda a: len(a.strip()) > 10 and any(c.isdigit() for c in a)
 
 # ───────────── Helpers
 cart_total = lambda c: sum(i["qty"] * i["price"] for i in c)
@@ -218,7 +205,7 @@ def update_stock(cart):
                     if new < 0:
                         log.error(f"Cannot update stock for {pid}: negative stock")
                         return False
-                    products_ws.update_cell(idx, 10, new)  # Column J (10); adjust if stock is in a different column
+                    products_ws.update_cell(idx, 10, new)  # Column J (10)
                     get_products().get(pid)["stock"] = new
                     log.info(f"Updated stock for {pid}: {new}")
         return True
@@ -226,8 +213,90 @@ def update_stock(cart):
         log.error(f"Stock update error: {e}")
         return False
 
+# ───────────── Order States
+ASK_NAME, ASK_PHONE, ASK_ADDRESS, ASK_POSTAL = range(4)
+
+# ───────────── Order Process
+async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not ctx.user_data.get("dest"):
+        await q.message.reply_text("لطفاً مقصد (پروجا/ایتالیا) را انتخاب کنید.", reply_markup=kb_cart(ctx.user_data.get("cart", [])))
+        return
+    ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
+    ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
+    await q.message.reply_text(m("INPUT_NAME"))
+    return ASK_NAME
+
+async def ask_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["name"] = update.message.text.strip()
+    await update.message.reply_text(m("INPUT_PHONE"))
+    return ASK_PHONE
+
+async def ask_address(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["phone"] = update.message.text.strip()
+    await update.message.reply_text(m("INPUT_ADDRESS"))
+    return ASK_ADDRESS
+
+async def ask_postal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["address"] = update.message.text.strip()
+    await update.message.reply_text(m("INPUT_POSTAL"))
+    return ASK_POSTAL
+
+async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["postal"] = update.message.text.strip()
+    cart = ctx.user_data.get("cart", [])
+    if not cart:
+        await update.message.reply_text(m("CART_EMPTY"), reply_markup=ReplyKeyboardRemove())
+        ctx.user_data.clear()
+        return ConversationHandler.END
+
+    if not update_stock(cart):
+        await update.message.reply_text("❌ موجودی کافی نیست.", reply_markup=ReplyKeyboardRemove())
+        ctx.user_data.clear()
+        return ConversationHandler.END
+
+    order_id = str(uuid.uuid4())[:8]
+    ts = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    total = cart_total(cart)
+    address_full = f"{ctx.user_data['address']} | {ctx.user_data['postal']}"
+    try:
+        for it in cart:
+            orders_ws.append_row([
+                ts, order_id, update.effective_user.id, ctx.user_data["handle"],
+                ctx.user_data["name"], ctx.user_data["phone"], address_full,
+                ctx.user_data["dest"], it["id"], it["fa"], it["qty"], it["price"], it["qty"] * it["price"]
+            ])
+        log.info(f"Order {order_id} saved to Google Sheets for user {ctx.user_data['handle']}")
+        await update.message.reply_text(
+            f"{m('ORDER_CONFIRMED')}\n\n📍 مقصد: {ctx.user_data['dest']}\n💶 مجموع: {total:.2f}€",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    except Exception as e:
+        log.error(f"Error saving order {order_id}: {e}")
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
+        ctx.user_data.clear()
+        return ConversationHandler.END
+
+    if promo := MSG.get("PROMO_AFTER_ORDER"):
+        await update.message.reply_text(promo, disable_web_page_preview=True)
+    if ADMIN_ID:
+        msg = [f"🆕 سفارش {order_id}", f"{ctx.user_data['name']} — {total:.2f}€"] + \
+              [f"▫️ {i['qty']}× {i['fa']}" for i in cart]
+        try:
+            await bot.send_message(ADMIN_ID, "\n".join(msg))
+            log.info(f"Admin notified for order {order_id}")
+        except Exception as e:
+            log.error(f"Failed to notify admin for order {order_id}: {e}")
+    ctx.user_data.clear()
+    return ConversationHandler.END
+
+async def cancel_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data.clear()
+    await update.message.reply_text(m("ORDER_CANCELLED"), reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
 # ───────────── Router
-async def router(update: Update, ctx):
+async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     d = q.data
     await q.answer()
@@ -250,7 +319,7 @@ async def router(update: Update, ctx):
         return
     if d.startswith("add_"):
         pid = d[4:]
-        ok, msg = await add_cart(ctx, pid, qty=1)  # افزودن با مقدار پیش‌فرض 1
+        ok, msg = await add_cart(ctx, pid, qty=1)
         await q.answer(msg, show_alert=not ok)
         cat = get_products()[pid]["cat"]
         await safe_edit(q, EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx))
@@ -285,18 +354,14 @@ async def router(update: Update, ctx):
         return
     if d in ["order_perugia", "order_italy"]:
         ctx.user_data["dest"] = "Perugia" if d == "order_perugia" else "Italy"
-        await q.message.reply_text("لطفاً برای ادامه، دکمه '✔️ ادامه' را بزنید.")
+        await safe_edit(q, fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])))
         return
     if d == "checkout":
-        if not ctx.user_data.get("dest"):
-            await q.message.reply_text("لطفاً مقصد (پروجا/ایتالیا) را انتخاب کنید.", reply_markup=kb_cart(ctx.user_data.get("cart", [])))
-            return
-        await start_form(update, ctx)
-        return
+        return await start_order(update, ctx)
 
 # ───────────── /search
 from difflib import get_close_matches
-async def cmd_search(u, ctx):
+async def cmd_search(u, ctx: ContextTypes.DEFAULT_TYPE):
     q = " ".join(ctx.args).lower()
     if not q:
         await u.message.reply_text(m("SEARCH_USAGE"))
@@ -315,92 +380,14 @@ async def cmd_search(u, ctx):
         else:
             await u.message.reply_text(cap, reply_markup=btn)
 
-# ───────────── Order conversation
-NAME, PHONE, ADDR, POSTAL, NOTES = range(5)
-async def start_form(u, ctx):
-    q = u.callback_query
-    dest = ctx.user_data.get("dest")
-    if not dest:
-        await q.answer("لطفاً از سبد خرید گزینه تحویل را انتخاب کنید.")
-        return
-    ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
-    ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
-    await q.answer()
-    await q.message.reply_text(m("INPUT_PHONE") + "\n📞 راهنما: لطفاً شماره تلفن (با کد کشور مثل +39123456789 یا بدون کد مثل 0123456789) وارد کنید.")
-    return PHONE
-
-async def step_phone(u, ctx):
-    log.info(f"Received phone: {u.message.text}")  # اضافه کردن لاگ برای دیباگ
-    if not ok_phone(u.message.text):
-        await u.message.reply_text("❌ شماره تلفن نامعتبر است!\n📞 لطفاً شماره تلفن معتبر (با کد کشور مثل +39123456789 یا بدون کد مثل 0123456789) وارد کنید.")
-        return PHONE
-    ctx.user_data["phone"] = u.message.text
-    await u.message.reply_text(m("INPUT_ADDRESS") + " (حداقل 10 کاراکتر با یک عدد)")
-    return ADDR
-
-async def step_addr(u, ctx):
-    if not ok_addr(u.message.text):
-        await u.message.reply_text(m("ADDRESS_INVALID") + " (حداقل 10 کاراکتر با یک عدد وارد کنید)")
-        return ADDR
-    ctx.user_data["address"] = u.message.text
-    await u.message.reply_text(m("INPUT_POSTAL"))
-    return POSTAL
-
-async def step_postal(u, ctx):
-    ctx.user_data["postal"] = u.message.text
-    await u.message.reply_text(m("INPUT_NOTES"))
-    return NOTES
-
-async def step_notes(u, ctx):
-    ctx.user_data["notes"] = u.message.text or "-"
-    cart = ctx.user_data.get("cart", [])
-    if not cart:
-        await u.message.reply_text(m("CART_EMPTY"), reply_markup=ReplyKeyboardRemove())
-        return ConversationHandler.END
-    if not update_stock(cart):
-        await u.message.reply_text("❌ موجودی کافی نیست.", reply_markup=ReplyKeyboardRemove())
-        return ConversationHandler.END
-    order_id = str(uuid.uuid4())[:8]
-    ts = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        for it in cart:
-            orders_ws.append_row([
-                ts, order_id, u.effective_user.id, ctx.user_data["handle"],
-                ctx.user_data["name"], ctx.user_data["phone"], ctx.user_data["address"],
-                ctx.user_data["dest"], it["id"], it["fa"], it["qty"], it["price"], it["qty"] * it["price"]
-            ])
-        log.info(f"Order {order_id} saved to Google Sheets for user {ctx.user_data['handle']}")
-    except Exception as e:
-        log.error(f"Error saving order {order_id}: {e}")
-        await u.message.reply_text("❌ خطا در ثبت سفارش.", reply_markup=ReplyKeyboardRemove())
-        return ConversationHandler.END
-    await u.message.reply_text(m("ORDER_CONFIRMED"), reply_markup=ReplyKeyboardRemove())
-    if promo := MSG.get("PROMO_AFTER_ORDER"):
-        await u.message.reply_text(promo, disable_web_page_preview=True)
-    if ADMIN_ID:
-        msg = [f"🆕 سفارش {order_id}", f"{ctx.user_data['name']} — {cart_total(cart):.2f}€"] + \
-              [f"▫️ {i['qty']}× {i['fa']}" for i in cart]
-        try:
-            await bot.send_message(ADMIN_ID, "\n".join(msg))
-            log.info(f"Admin notified for order {order_id}")
-        except Exception as e:
-            log.error(f"Failed to notify admin for order {order_id}: {e}")
-    ctx.user_data.clear()
-    return ConversationHandler.END
-
-async def cancel(u, ctx):
-    ctx.user_data.clear()
-    await u.message.reply_text(m("ORDER_CANCELLED"), reply_markup=ReplyKeyboardRemove())
-    return ConversationHandler.END
-
 # ───────────── Commands
-async def cmd_start(u, ctx):
+async def cmd_start(u, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_html(m("WELCOME"), reply_markup=kb_main(ctx))
 
-async def cmd_about(u, ctx):
+async def cmd_about(u, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(m("ABOUT_US"), disable_web_page_preview=True)
 
-async def cmd_privacy(u, ctx):
+async def cmd_privacy(u, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(m("PRIVACY"), disable_web_page_preview=True)
 
 # ───────────── App, webhook and FastAPI
@@ -415,18 +402,16 @@ async def _on_startup():
     tg_app.add_handler(CommandHandler("search", cmd_search))
     tg_app.add_handler(CommandHandler("about", cmd_about))
     tg_app.add_handler(CommandHandler("privacy", cmd_privacy))
-    conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_form, pattern="^checkout$")],
+    tg_app.add_handler(ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_order, pattern="^checkout$")],
         states={
-            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_phone)],
-            ADDR: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_addr)],
-            POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_postal)],
-            NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, step_notes)],
+            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_phone)],
+            ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_address)],
+            ASK_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_postal)],
+            ASK_POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True
-    )
-    tg_app.add_handler(conv)
+        fallbacks=[CommandHandler("cancel", cancel_order)]
+    ))
     tg_app.add_handler(CallbackQueryHandler(router))
     webhook_url = f"{BASE_URL}/webhook"
     await tg_app.bot.set_webhook(webhook_url)
