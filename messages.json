@@ -14,4 +14,7 @@
   "INPUT_POSTAL": "🏷 کدپستی را وارد کنید:\nInserisci il CAP:",
   "INPUT_NOTES": "📝 اگر توضیح یا یادداشتی دارید بنویسید، در غیر این صورت /skip را بزنید.\nScrivi una nota se necessario, o premi /skip.",
   "ORDER_CONFIRMED": "📦 سفارش شما با موفقیت ثبت شد و در حال پردازش است.\nOrdine confermato e in elaborazione."
+  "ABOUT_US": "ما تیم بazarino هستیم، ارائه‌دهنده محصولات باکیفیت... | Siamo il team di Bazarino, offriamo prodotti di qualità...",
+  "PRIVACY": "حریم خصوصی شما برای ما مهم است... | La tua privacy è importante per noi...",
+  ...
 }
