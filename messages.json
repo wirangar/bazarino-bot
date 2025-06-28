@@ -13,8 +13,7 @@
   "INPUT_ADDRESS": "📍 لطفاً آدرس کامل تحویل را وارد کنید:\nInserisci l'indirizzo di consegna completo:",
   "INPUT_POSTAL": "🏷 کدپستی را وارد کنید:\nInserisci il CAP:",
   "INPUT_NOTES": "📝 اگر توضیح یا یادداشتی دارید بنویسید، در غیر این صورت /skip را بزنید.\nScrivi una nota se necessario, o premi /skip.",
-  "ORDER_CONFIRMED": "📦 سفارش شما با موفقیت ثبت شد و در حال پردازش است.\nOrdine confermato e in elaborazione."
-  "ABOUT_US": "ما تیم بazarino هستیم، ارائه‌دهنده محصولات باکیفیت... | Siamo il team di Bazarino, offriamo prodotti di qualità...",
-  "PRIVACY": "حریم خصوصی شما برای ما مهم است... | La tua privacy è importante per noi...",
-  ...
+  "ORDER_CONFIRMED": "📦 سفارش شما با موفقیت ثبت شد و در حال پردازش است.\nOrdine confermato e in elaborazione.",
+  "ABOUT_US": "👋 ما خانوادهٔ بازارینو هستیم؛ پل کوچکی میان طعم‌های خانگی ایران و دوستانمان در ایتالیا. هر محصول را با وسواس انتخاب می‌کنیم تا اصالت، کیفیت و حس نوستالژی را یک‌جا به شما برسانیم.\n👋 Siamo la famiglia di Bazarino: un piccolo ponte tra i sapori di casa persiani e i nostri amici in Italia. Selezioniamo ogni prodotto con cura per offrirti autenticità, qualità e un pizzico di nostalgia.",
+  "PRIVACY": "🔒 اطلاعات شخصی شما فقط برای پردازش سفارش و بهبود خدمات استفاده می‌شود؛ هیچ‌گاه بدون رضایت، با شخص ثالثی به اشتراک گذاشته نمی‌شود.\n🔒 I tuoi dati vengono utilizzati esclusivamente per elaborare l’ordine e migliorare il servizio; non saranno mai condivisi con terzi senza il tuo consenso."
 }
