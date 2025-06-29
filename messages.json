@@ -24,5 +24,5 @@
   "BTN_BACK": "⬅️ بازگشت / Indietro",
   "BTN_ORDER_PERUGIA": "📦 تحویل در پروجا / Consegna a Perugia",
   "BTN_ORDER_ITALY": "🚚 ارسال به سراسر ایتالیا / Spedizione in tutta Italia",
-  "PROMO_AFTER_ORDER": "🎁 با استفاده از کد تخفیف <b>BAZAR10</b> در سفارش بعدی، ۱۰٪ تخفیف بگیرید!\nRicevi il 10% di sconto sul tuo prossimo ordine con il codice <b>BAZAR10</b>!"
+  "PROMO_AFTER_ORDER": "🎁 با استفاده از کد تخفیف ||BAZAR10|| در سفارش بعدی، ۱۰٪ تخفیف بگیرید!\nRicevi il 10% di sconto sul tuo prossimo ordine con il codice ||BAZAR10||!"
 }
