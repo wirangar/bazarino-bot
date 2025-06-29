@@ -182,14 +182,14 @@ async def add_cart(ctx, pid, qty=1):
 def fmt_cart(cart):
     if not cart:
         return m("CART_EMPTY")
-    lines = ["🛍 <b>سبد خرید:</b>", ""]
+    lines = ["🛍 **سبد خرید:**", ""]
     tot = 0
     for it in cart:
         sub = it["qty"] * it["price"]
         tot += sub
         lines.append(f"▫️ {it['qty']}× {it['fa']} — {sub:.2f}€")
     lines.append("")
-    lines.append(f"💶 <b>جمع:</b> {tot:.2f}€")
+    lines.append(f"💶 **جمع:** {tot:.2f}€")
     return "\n".join(lines)
 
 # ───────────── Stock update
@@ -309,7 +309,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if d.startswith("show_"):
         pid = d[5:]
         p = get_products()[pid]
-        cap = f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\n{p['price']}€ / {p['weight']}\nموجودی: {p['stock']}"
+        cap = f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\n{p['price']}€ / {p['weight']}\n||موجودی:|| {p['stock']}"
         if p["image_url"] and p["image_url"].strip():
             await ctx.bot.send_photo(chat_id=q.message.chat.id, photo=p["image_url"], caption=cap,
                                    reply_markup=kb_product(pid), parse_mode="HTML")
