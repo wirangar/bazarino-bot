@@ -611,6 +611,9 @@ bot = tg_app.bot
 @api.on_event("startup")
 async def _on_startup():
     await tg_app.initialize()
+    # اطمینان از فعال بودن JobQueue
+    if not tg_app.job_queue:
+        tg_app.job_queue = JobQueue()
     job_queue = tg_app.job_queue
     job_queue.run_daily(send_cart_reminder, time=dt.time(hour=18, minute=0))
     job_queue.run_repeating(check_order_status, interval=600)  # هر 10 دقیقه
