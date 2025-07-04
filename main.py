@@ -28,6 +28,10 @@ from telegram.ext import (
 )
 from telegram.error import BadRequest, NetworkError
 
+# تعریف متغیرهای سراسری
+tg_app = None
+bot = None
+
 # ───────────── Lazy-import Pillow
 def generate_invoice(order_id, user_data, cart, total, discount):
     from PIL import Image, ImageDraw, ImageFont
@@ -606,6 +610,7 @@ async def cmd_privacy(u, ctx: ContextTypes.DEFAULT_TYPE):
 api = FastAPI()
 
 async def lifespan(app: FastAPI):
+    global tg_app, bot
     tg_app = ApplicationBuilder().token(TOKEN).build()
     bot = tg_app.bot
     # اطمینان از فعال بودن JobQueue
