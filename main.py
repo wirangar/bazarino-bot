@@ -141,7 +141,7 @@ def m(k: str) -> str:
     return MSG.get(k, f"[{k}]")
 
 # ───────────── ENV
-for v in ("TELEGRAM_TOKEN", "ADMIN_CHAT_ID", "GOOGLE_CREDS", "BASE_URL"):
+for v in ("TELEGRAM_TOKEN", "ADMIN_CHAT_ID", "BASE_URL"):
     if not os.getenv(v):
         log.error(f"Missing environment variable: {v}")
         raise SystemExit(f"❗️ متغیر محیطی {v} تنظیم نشده است.")
@@ -158,22 +158,39 @@ PORT = int(os.getenv("PORT", "8000"))
 # ───────────── Google Sheets
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    CREDS_JSON = json.loads(os.getenv("GOOGLE_CREDS"))
+    creds_path = os.getenv("GOOGLE_CREDS", "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json")
+    try:
+        with open(creds_path, "r", encoding="utf-8") as f:
+            CREDS_JSON = json.load(f)
+    except FileNotFoundError:
+        log.error(f"Credentials file '{creds_path}' not found")
+        raise SystemExit(f"❗️ فایل احراز هویت '{creds_path}' یافت نشد.")
+    except json.JSONDecodeError as e:
+        log.error(f"Failed to parse credentials file '{creds_path}': {e}")
+        raise SystemExit(f"❗️ خطا در تجزیه فایل احراز هویت '{creds_path}': {e}")
     gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(CREDS_JSON, scope))
-    wb = gc.open(SPREADSHEET)
-    orders_ws = wb.worksheet(SHEET_CONFIG["orders"]["name"])
-    products_ws = wb.worksheet(SHEET_CONFIG["products"]["name"])
+    try:
+        wb = gc.open(SPREADSHEET)
+    except gspread.exceptions.SpreadsheetNotFound:
+        log.error(f"Spreadsheet '{SPREADSHEET}' not found. Please check the SPREADSHEET_NAME and access permissions.")
+        raise SystemExit(f"❗️ فایل Google Spreadsheet با نام '{SPREADSHEET}' یافت نشد.")
+    try:
+        orders_ws = wb.worksheet(SHEET_CONFIG["orders"]["name"])
+        products_ws = wb.worksheet(SHEET_CONFIG["products"]["name"])
+    except gspread.exceptions.WorksheetNotFound as e:
+        log.error(f"Worksheet not found: {e}. Check config.yaml for correct worksheet names.")
+        raise SystemExit(f"❗️ خطا در دسترسی به worksheet: {e}")
     try:
         abandoned_cart_ws = wb.worksheet(SHEET_CONFIG["abandoned_carts"]["name"])
-    except:
+    except gspread.exceptions.WorksheetNotFound:
         abandoned_cart_ws = wb.add_worksheet(title=SHEET_CONFIG["abandoned_carts"]["name"], rows=100, cols=3)
     try:
         discounts_ws = wb.worksheet(SHEET_CONFIG["discounts"]["name"])
-    except:
+    except gspread.exceptions.WorksheetNotFound:
         discounts_ws = wb.add_worksheet(title=SHEET_CONFIG["discounts"]["name"], rows=100, cols=4)
     try:
         uploads_ws = wb.worksheet(SHEET_CONFIG["uploads"]["name"])
-    except:
+    except gspread.exceptions.WorksheetNotFound:
         uploads_ws = wb.add_worksheet(title=SHEET_CONFIG["uploads"]["name"], rows=100, cols=4)
 except Exception as e:
     log.error(f"Failed to initialize Google Sheets: {e}")
