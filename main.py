@@ -128,13 +128,13 @@ def m(k: str) -> str:
     return MSG.get(k, f"[{k}]")
 
 # ───────────── ENV
-for v in ("TELEGRAM_TOKEN", "ADMIN_CHAT_ID", "GOOGLE_CREDS", "BASE_URL", "WEBHOOK_SECRET"):
+for v in ("TELEGRAM_TOKEN", "ADMIN_CHAT_ID", "GOOGLE_CREDS", "BASE_URL"):
     if not os.getenv(v):
         log.error(f"Missing environment variable: {v}")
         raise SystemExit(f"❗️ متغیر محیطی {v} تنظیم نشده است.")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = os.getenv("BASE_URL").rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+WEBHOOK_SECRET = "EhsaNegar1394"  # مقدار ثابت تنظیم شده
 ADMIN_ID = int(os.getenv("ADMIN_CHAT_ID"))
 SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
 PRODUCT_WS = os.getenv("PRODUCT_WORKSHEET", "Sheet2")
