@@ -23,7 +23,7 @@ from telegram import (
     InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 )
 from telegram.ext import (
-    ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes,
+    Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes,
     ConversationHandler, MessageHandler, filters, JobQueue
 )
 from telegram.error import BadRequest, NetworkError
@@ -611,8 +611,11 @@ api = FastAPI()
 
 async def lifespan(app: FastAPI):
     global tg_app, bot
-    tg_app = ApplicationBuilder().token(TOKEN).build()
+    builder = ApplicationBuilder().token(TOKEN)
+    tg_app = builder.build()
     bot = tg_app.bot
+    # تنظیم اولیه Application
+    await tg_app.initialize()
     # اطمینان از فعال بودن JobQueue
     if not tg_app.job_queue:
         tg_app.job_queue = JobQueue()
