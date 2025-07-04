@@ -13,7 +13,7 @@
   "INPUT_ADDRESS": "📍 لطفاً آدرس کامل تحویل را وارد کنید:\nInserisci l'indirizzo di consegna completo:",
   "INPUT_POSTAL": "🏷 کدپستی را وارد کنید:\nInserisci il CAP:",
   "INPUT_NOTES": "📝 اگر توضیح یا یادداشتی دارید بنویسید، در غیر این صورت /skip را بزنید.\nScrivi una nota se necessario, o premi /skip.",
-  "ORDER_CONFIRMED": "📦 سفارش شما با موفقیت ثبت شد و در حال پردازش است.\nOrdine confermato e in elaborazione.",
+  "ORDER_CONFIRMED": "📦 سفارش شما با موفقیت ثبت شد و در حال آماده‌سازی است.\nOrdine confermato e in preparazione.",
   "ABOUT_US": "👋 ما خانوادهٔ بازارینو هستیم؛ پل کوچکی میان طعم‌های خانگی ایران و دوستانمان در ایتالیا. هر محصول را با وسواس انتخاب می‌کنیم تا اصالت، کیفیت و حس نوستالژی را یک‌جا به شما برسانیم.\n👋 Siamo la famiglia di Bazarino: un piccolo ponte tra i sapori di casa persiani e i nostri amici in Italia. Selezioniamo ogni prodotto con cura per offrirti autenticità, qualità e un pizzico di nostalgia.",
   "PRIVACY": "🔒 اطلاعات شخصی شما فقط برای پردازش سفارش و بهبود خدمات استفاده می‌شود؛ هیچ‌گاه بدون رضایت، با شخص ثالثی به اشتراک گذاشته نمی‌شود.\n🔒 I tuoi dati vengono utilizzati esclusivamente per elaborare l’ordine e migliorare il servizio; non saranno mai condivisi con terzi senza il tuo consenso.",
   "BTN_SEARCH": "🔍 جستجو / Cerca",
@@ -24,5 +24,10 @@
   "BTN_BACK": "⬅️ بازگشت / Indietro",
   "BTN_ORDER_PERUGIA": "📦 تحویل در پروجا / Consegna a Perugia",
   "BTN_ORDER_ITALY": "🚚 ارسال به سراسر ایتالیا / Spedizione in tutta Italia",
-  "PROMO_AFTER_ORDER": "🎁 با استفاده از کد تخفیف ||BAZAR10|| در سفارش بعدی، ۱۰٪ تخفیف بگیرید!\nRicevi il 10% di sconto sul tuo prossimo ordine con il codice ||BAZAR10||!"
+  "PROMO_AFTER_ORDER": "🎁 با استفاده از کد تخفیف ||BAZAR10|| در سفارش بعدی، ۱۰٪ تخفیف بگیرید!\nRicevi il 10% di sconto sul tuo prossimo ordine con il codice ||BAZAR10||!",
+  "SUPPORT_MESSAGE": "📞 با پشتیبانی تماس بگیرید: @BazarinoSupport\nContatta il supporto: @BazarinoSupport\n📷 برای ارسال رسید پرداخت یا درخواست خاص، دکمه زیر را بزنید:",
+  "UPLOAD_PHOTO": "📷 لطفاً تصویر خود را ارسال کنید (مثلاً رسید پرداخت یا درخواست خاص):\nInvia la tua immagine (es. ricevuta di pagamento o richiesta speciale):",
+  "PHOTO_UPLOADED": "✅ تصویر شما با موفقیت به پشتیبانی ارسال شد!\nL'immagine è stata inviata con successo al supporto!",
+  "ERROR_UPLOAD": "❌ خطا در ارسال تصویر. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.\nErrore durante l'invio dell'immagine. Riprova o contatta il supporto.",
+  "ERROR_FILE_SIZE": "❌ حجم تصویر بیش از حد مجاز (2 مگابایت) است.\nL'immagine supera il limite di 2 MB."
 }
