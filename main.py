@@ -200,14 +200,14 @@ async def load_discounts():
         log.error(f"Error loading discounts: {e}")
         return {}
 
-# Versioned cache for products
-def get_products():
-    current_version = products_ws.acell("L1").value or "0"  # ستون version
+# Versioned cache for products (اصلاح‌شده برای محیط آسنکرون)
+async def get_products():
+    current_version = await asyncio.to_thread(products_ws.acell, "L1").value or "0"  # ستون version
     if (not getattr(get_products, "_data", None) or
         not getattr(get_products, "_version", None) or
         get_products._version != current_version or
-        dt.datetime.utcnow() > get_products._ts):
-        get_products._data = asyncio.run(load_products())
+        dt.datetime.utcnow() > getattr(get_products, "_ts", dt.datetime.min)):
+        get_products._data = await load_products()
         get_products._version = current_version
         get_products._ts = dt.datetime.utcnow() + dt.timedelta(seconds=15)
         log.info(f"Loaded {len(get_products._data)} products from Google Sheets, version {current_version}")
@@ -237,16 +237,16 @@ async def alert_admin(pid, stock):
     if stock <= LOW_STOCK_TH and ADMIN_ID:
         for _ in range(3):
             try:
-                await bot.send_message(ADMIN_ID, f"⚠️ موجودی کم {stock}: {get_products()[pid]['fa']}")
-                log.info(f"Low stock alert sent for {get_products()[pid]['fa']}")
+                await bot.send_message(ADMIN_ID, f"⚠️ موجودی کم {stock}: {await get_products()[pid]['fa']}")
+                log.info(f"Low stock alert sent for {await get_products()[pid]['fa']}")
                 break
             except Exception as e:
                 log.error(f"Alert fail attempt: {e}")
                 await asyncio.sleep(1)
 
 # ───────────── Keyboards
-def kb_main(ctx):
-    cats = {p["cat"] for p in get_products().values()}
+async def kb_main(ctx):
+    cats = {p["cat"] for p in (await get_products()).values()}
     rows = [[InlineKeyboardButton(EMOJI.get(c, c), callback_data=f"cat_{c}")] for c in cats]
     cart = ctx.user_data.get("cart", [])
     cart_summary = f"{m('BTN_CART')} ({cart_count(ctx)} آیتم - {cart_total(cart):.2f}€)" if cart else m("BTN_CART")
@@ -262,7 +262,7 @@ def kb_main(ctx):
 
 def kb_category(cat, ctx):
     rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")]
-            for pid, p in get_products().items() if p["cat"] == cat]
+            for pid, p in (await get_products()).items() if p["cat"] == cat]
     rows.append([
         InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
         InlineKeyboardButton(m("BTN_BACK"), callback_data="back")
@@ -270,7 +270,7 @@ def kb_category(cat, ctx):
     return InlineKeyboardMarkup(rows)
 
 def kb_product(pid):
-    p = get_products()[pid]
+    p = (await get_products())[pid]
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}")],
         [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{p['cat']}")]
@@ -304,7 +304,7 @@ def kb_support():
 
 # ───────────── Cart operations
 async def add_cart(ctx, pid, qty=1, update=None):
-    prods = get_products()
+    prods = await get_products()
     if pid not in prods:
         return False, m("STOCK_EMPTY")
     p = prods[pid]
@@ -357,7 +357,7 @@ async def update_stock(cart):
                         log.error(f"Cannot update stock for {pid}: negative stock")
                         return False
                     await asyncio.to_thread(products_ws.update_cell, idx, 10, new)
-                    get_products().get(pid)["stock"] = new
+                    (await get_products()).get(pid)["stock"] = new
                     log.info(f"Updated stock for {pid}: {new}")
         return True
     except Exception as e:
@@ -581,7 +581,7 @@ async def cmd_search(u, ctx: ContextTypes.DEFAULT_TYPE):
     if not q:
         await u.message.reply_text(m("SEARCH_USAGE"))
         return
-    hits = [(pid, p) for pid, p in get_products().items()
+    hits = [(pid, p) for pid, p in (await get_products()).items()
             if q in p['fa'].lower() or q in p['it'].lower()
             or get_close_matches(q, [p['fa'].lower() + " " + p['it'].lower()], cutoff=0.6)]
     if not hits:
@@ -598,7 +598,7 @@ async def cmd_search(u, ctx: ContextTypes.DEFAULT_TYPE):
 # ───────────── Commands
 async def cmd_start(u, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["user_id"] = u.effective_user.id
-    await u.message.reply_html(m("WELCOME"), reply_markup=kb_main(ctx))
+    await u.message.reply_html(m("WELCOME"), reply_markup=await kb_main(ctx))
 
 async def cmd_about(u, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(m("ABOUT_US"), disable_web_page_preview=True)
@@ -671,7 +671,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     
     if d == "back":
-        await safe_edit(q, m("WELCOME"), reply_markup=kb_main(ctx), parse_mode="HTML")
+        await safe_edit(q, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
         return
     
     if d == "support":
@@ -684,9 +684,9 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     
     if d == "bestsellers":
-        bestsellers = [(pid, p) for pid, p in get_products().items() if p.get("is_bestseller", False)]
+        bestsellers = [(pid, p) for pid, p in (await get_products()).items() if p.get("is_bestseller", False)]
         if not bestsellers:
-            await safe_edit(q, "🔥 در حال حاضر محصول پرفروشی وجود ندارد.\nNessun prodotto più venduto al momento.", reply_markup=kb_main(ctx), parse_mode="HTML")
+            await safe_edit(q, "🔥 در حال حاضر محصول پرفروشی وجود ندارد.\nNessun prodotto più venduto al momento.", reply_markup=await kb_main(ctx), parse_mode="HTML")
             return
         rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")] for pid, p in bestsellers]
         rows.append([InlineKeyboardButton(m("BTN_BACK"), callback_data="back")])
@@ -694,7 +694,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     
     if d == "search":
-        await safe_edit(q, m("SEARCH_USAGE"), reply_markup=kb_main(ctx))
+        await safe_edit(q, m("SEARCH_USAGE"), reply_markup=await kb_main(ctx))
         return
     
     if d.startswith("cat_"):
@@ -704,7 +704,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     
     if d.startswith("show_"):
         pid = d[5:]
-        p = get_products()[pid]
+        p = (await get_products())[pid]
         cap = f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\n{p['price']}€ / {p['weight']}\n||موجودی / Stock:|| {p['stock']}"
         try:
             await q.message.delete()
@@ -731,7 +731,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pid = d[4:]
         ok, msg = await add_cart(ctx, pid, qty=1, update=update)
         await q.answer(msg, show_alert=not ok)
-        cat = get_products()[pid]["cat"]
+        cat = (await get_products())[pid]["cat"]
         await safe_edit(q, EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx), parse_mode="HTML")
         return
     
