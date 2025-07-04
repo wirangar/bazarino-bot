@@ -10,7 +10,13 @@ Bazarino Telegram Bot – Optimized Version
 """
 
 from __future__ import annotations
-import asyncio, datetime as dt, json, logging, os, uuid, yaml
+import asyncio
+import datetime as dt
+import json
+import logging
+import os
+import uuid
+import yaml
 from typing import Dict, Any, List
 import io
 import random
@@ -19,21 +25,30 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from fastapi import FastAPI, Request, HTTPException
 import uvicorn
-from telegram import (
-    InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
-)
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
     Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes,
     ConversationHandler, MessageHandler, filters, JobQueue
 )
 from telegram.error import BadRequest, NetworkError
 
-# تعریف متغیرهای سراسری
+# Logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("bazarino.log")
+    ]
+)
+log = logging.getLogger("bazarino")
+
+# Global variables
 tg_app = None
 bot = None
 
 # ───────────── Lazy-import Pillow
-def generate_invoice(order_id, user_data, cart, total, discount):
+async def generate_invoice(order_id, user_data, cart, total, discount):
     from PIL import Image, ImageDraw, ImageFont
     width, height = 600, 900
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
@@ -51,7 +66,7 @@ def generate_invoice(order_id, user_data, cart, total, discount):
         small_font = ImageFont.truetype("fonts/Vazir.ttf", 16)
     except Exception as e:
         log.error(f"Font loading error: {e}")
-        title_font = body_font = small_font = ImageFont.load_default()
+        title_font = body_font = small_font = ImageFont.load_default(18)
 
     draw.rectangle([(0, 0), (width, 80)], fill=header_color)
     draw.text((width // 2, 40), "فاکتور بازارینو / Fattura Bazarino", fill=(255, 255, 255), font=title_font, anchor="mm")
@@ -103,13 +118,6 @@ def generate_invoice(order_id, user_data, cart, total, discount):
     buffer.seek(0)
     return buffer
 
-# ───────────── Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
-log = logging.getLogger("bazarino")
-
 # ───────────── Config
 try:
     with open("config.yaml", encoding="utf-8") as f:
@@ -128,6 +136,7 @@ try:
 except FileNotFoundError:
     log.error("messages.json not found")
     raise SystemExit("❗️ فایل messages.json یافت نشد.")
+
 def m(k: str) -> str:
     return MSG.get(k, f"[{k}]")
 
@@ -136,20 +145,21 @@ for v in ("TELEGRAM_TOKEN", "ADMIN_CHAT_ID", "GOOGLE_CREDS", "BASE_URL"):
     if not os.getenv(v):
         log.error(f"Missing environment variable: {v}")
         raise SystemExit(f"❗️ متغیر محیطی {v} تنظیم نشده است.")
+
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = os.getenv("BASE_URL").rstrip("/")
-WEBHOOK_SECRET = "EhsaNegar1394"  # مقدار ثابت تنظیم شده
+WEBHOOK_SECRET = "EhsaNegar1394"
 ADMIN_ID = int(os.getenv("ADMIN_CHAT_ID"))
 SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
 PRODUCT_WS = os.getenv("PRODUCT_WORKSHEET", "Sheet2")
 LOW_STOCK_TH = int(os.getenv("LOW_STOCK_THRESHOLD", "3"))
 PORT = int(os.getenv("PORT", "8000"))
-CREDS_PATH = os.getenv("GOOGLE_CREDS", "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json")
 
-# ───────────── Google-Sheets
+# ───────────── Google Sheets
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_name(CREDS_PATH, scope))
+    CREDS_JSON = json.loads(os.getenv("GOOGLE_CREDS"))
+    gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(CREDS_JSON, scope))
     wb = gc.open(SPREADSHEET)
     orders_ws = wb.worksheet(SHEET_CONFIG["orders"]["name"])
     products_ws = wb.worksheet(SHEET_CONFIG["products"]["name"])
@@ -200,16 +210,16 @@ async def load_discounts():
         log.error(f"Error loading discounts: {e}")
         return {}
 
-# Versioned cache for products (اصلاح‌شده برای محیط آسنکرون)
+# Versioned cache for products
 async def get_products():
-    current_version = await asyncio.to_thread(products_ws.acell, "L1").value or "0"  # ستون version
-    if (not getattr(get_products, "_data", None) or
-        not getattr(get_products, "_version", None) or
+    current_version = await asyncio.to_thread(products_ws.acell, "L1").value or "0"
+    if (not hasattr(get_products, "_data") or
+        not hasattr(get_products, "_version") or
         get_products._version != current_version or
         dt.datetime.utcnow() > getattr(get_products, "_ts", dt.datetime.min)):
         get_products._data = await load_products()
         get_products._version = current_version
-        get_products._ts = dt.datetime.utcnow() + dt.timedelta(seconds=15)
+        get_products._ts = dt.datetime.utcnow() + dt.timedelta(seconds=60)
         log.info(f"Loaded {len(get_products._data)} products from Google Sheets, version {current_version}")
     return get_products._data
 
@@ -237,8 +247,8 @@ async def alert_admin(pid, stock):
     if stock <= LOW_STOCK_TH and ADMIN_ID:
         for _ in range(3):
             try:
-                await bot.send_message(ADMIN_ID, f"⚠️ موجودی کم {stock}: {await get_products()[pid]['fa']}")
-                log.info(f"Low stock alert sent for {await get_products()[pid]['fa']}")
+                await bot.send_message(ADMIN_ID, f"⚠️ موجودی کم {stock}: {(await get_products())[pid]['fa']}")
+                log.info(f"Low stock alert sent for {(await get_products())[pid]['fa']}")
                 break
             except Exception as e:
                 log.error(f"Alert fail attempt: {e}")
@@ -260,7 +270,7 @@ async def kb_main(ctx):
     ])
     return InlineKeyboardMarkup(rows)
 
-def kb_category(cat, ctx):
+async def kb_category(cat, ctx):
     rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")]
             for pid, p in (await get_products()).items() if p["cat"] == cat]
     rows.append([
@@ -270,7 +280,7 @@ def kb_category(cat, ctx):
     return InlineKeyboardMarkup(rows)
 
 def kb_product(pid):
-    p = (await get_products())[pid]
+    p = get_products._data[pid] if hasattr(get_products, "_data") else (asyncio.run(get_products()))[pid]
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}")],
         [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{p['cat']}")]
@@ -357,7 +367,7 @@ async def update_stock(cart):
                         log.error(f"Cannot update stock for {pid}: negative stock")
                         return False
                     await asyncio.to_thread(products_ws.update_cell, idx, 10, new)
-                    (await get_products()).get(pid)["stock"] = new
+                    (await get_products())[pid]["stock"] = new
                     log.info(f"Updated stock for {pid}: {new}")
         return True
     except Exception as e:
@@ -492,7 +502,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     photo = update.message.photo[-1]
     if photo.file_size > 2 * 1024 * 1024:  # حداکثر 2 مگابایت
-        await update.message.reply_text(m("ERROR_FILE_SIZE"), reply_markup=kb_main(ctx))
+        await update.message.reply_text(m("ERROR_FILE_SIZE"), reply_markup=await kb_main(ctx))
         ctx.user_data["awaiting_photo"] = False
         return
     file = await photo.get_file()
@@ -512,10 +522,10 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(m("PHOTO_UPLOADED"))
         ctx.user_data["awaiting_photo"] = False
         ctx.user_data["photo_note"] = ""
-        await update.message.reply_text(m("SUPPORT_MESSAGE"), reply_markup=kb_main(ctx))
+        await update.message.reply_text(m("SUPPORT_MESSAGE"), reply_markup=await kb_main(ctx))
     except Exception as e:
         log.error(f"Error handling photo upload: {e}")
-        await update.message.reply_text(m("ERROR_UPLOAD"), reply_markup=kb_main(ctx))
+        await update.message.reply_text(m("ERROR_UPLOAD"), reply_markup=await kb_main(ctx))
 
 # ───────────── Push Notifications for Order Status
 async def check_order_status(context: ContextTypes.DEFAULT_TYPE):
@@ -536,7 +546,7 @@ async def check_order_status(context: ContextTypes.DEFAULT_TYPE):
                 "preparing": f"📦 سفارش شما (#{order_id}) در حال آماده‌سازی است!\nIl tuo ordine (#{order_id}) è in preparazione!",
                 "shipped": f"🚚 سفارش شما (#{order_id}) ارسال شد!\nIl tuo ordine (#{order_id}) è stato spedito!"
             }[status]
-            await context.bot.send_message(user_id, msg, reply_markup=kb_main(context))
+            await context.bot.send_message(user_id, msg, reply_markup=await kb_main(context))
             await asyncio.to_thread(orders_ws.update_cell, cell.row, 18, "TRUE")
             log.info(f"Sent {status} notification for order {order_id} to user {user_id}")
         check_order_status._last_checked_row = max(last_checked_row, max((c.row for c in shipped_cells + preparing_cells), default=1))
@@ -568,7 +578,7 @@ async def send_cart_reminder(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(
                     user_id,
                     f"🛒 سبد خرید شما هنوز منتظر شماست!\nHai lasciato qualcosa nel carrello!\n{fmt_cart(cart)}\n👉 برای تکمیل سفارش: /start",
-                    reply_markup=kb_main(context)
+                    reply_markup=await kb_main(context)
                 )
         await asyncio.to_thread(abandoned_cart_ws.clear)
     except Exception as e:
@@ -607,22 +617,29 @@ async def cmd_privacy(u, ctx: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(m("PRIVACY"), disable_web_page_preview=True)
 
 # ───────────── App, webhook and FastAPI
-api = FastAPI()
+async def post_init(app: Application):
+    log.info("Application initialized")
+    webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
+    await app.bot.set_webhook(webhook_url)
+    log.info(f"Webhook set to {webhook_url}")
+
+async def post_shutdown(app: Application):
+    log.info("Application shutting down")
+    await app.bot.delete_webhook()
 
 async def lifespan(app: FastAPI):
     global tg_app, bot
-    builder = ApplicationBuilder().token(TOKEN)
+    builder = ApplicationBuilder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
     tg_app = builder.build()
     bot = tg_app.bot
-    # تنظیم اولیه Application
     await tg_app.initialize()
-    # اطمینان از فعال بودن JobQueue
     if not tg_app.job_queue:
         tg_app.job_queue = JobQueue()
+        await tg_app.job_queue.start()
     job_queue = tg_app.job_queue
     job_queue.run_daily(send_cart_reminder, time=dt.time(hour=18, minute=0))
-    job_queue.run_repeating(check_order_status, interval=600)  # هر 10 دقیقه
-    job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))  # بکاپ هفتگی
+    job_queue.run_repeating(check_order_status, interval=600)
+    job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))
     tg_app.add_handler(CommandHandler("start", cmd_start))
     tg_app.add_handler(CommandHandler("search", cmd_search))
     tg_app.add_handler(CommandHandler("about", cmd_about))
@@ -641,10 +658,7 @@ async def lifespan(app: FastAPI):
         fallbacks=[CommandHandler("cancel", cancel_order)]
     ))
     tg_app.add_handler(CallbackQueryHandler(router))
-    webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
-    await tg_app.bot.set_webhook(webhook_url)
-    log.info(f"Webhook set to {webhook_url}")
-    yield  # نقطه شروع و پایان lifespan
+    yield
     await tg_app.shutdown()
 
 app = FastAPI(lifespan=lifespan)
@@ -655,7 +669,8 @@ async def wh(req: Request, secret: str):
         log.error("Invalid webhook secret")
         raise HTTPException(status_code=403, detail="Invalid secret")
     try:
-        update = Update.de_json(await req.json(), bot)
+        data = await req.json()
+        update = Update.de_json(data, bot)
         if not update:
             log.error("Invalid webhook update received")
             raise HTTPException(status_code=400, detail="Invalid update")
@@ -663,26 +678,26 @@ async def wh(req: Request, secret: str):
         return {"ok": True}
     except Exception as e:
         log.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     d = q.data
     await q.answer()
-    
+
     if d == "back":
         await safe_edit(q, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
         return
-    
+
     if d == "support":
         await safe_edit(q, m("SUPPORT_MESSAGE"), reply_markup=kb_support(), parse_mode="HTML")
         return
-    
+
     if d == "upload_photo":
         ctx.user_data["awaiting_photo"] = True
         await safe_edit(q, m("UPLOAD_PHOTO"), reply_markup=kb_support())
         return
-    
+
     if d == "bestsellers":
         bestsellers = [(pid, p) for pid, p in (await get_products()).items() if p.get("is_bestseller", False)]
         if not bestsellers:
@@ -692,16 +707,16 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         rows.append([InlineKeyboardButton(m("BTN_BACK"), callback_data="back")])
         await safe_edit(q, "🔥 محصولات پرفروش / Più venduti", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
         return
-    
+
     if d == "search":
         await safe_edit(q, m("SEARCH_USAGE"), reply_markup=await kb_main(ctx))
         return
-    
+
     if d.startswith("cat_"):
         cat = d[4:]
-        await safe_edit(q, EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx), parse_mode="HTML")
+        await safe_edit(q, EMOJI.get(cat, cat), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
         return
-    
+
     if d.startswith("show_"):
         pid = d[5:]
         p = (await get_products())[pid]
@@ -726,24 +741,24 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
         return
-    
+
     if d.startswith("add_"):
         pid = d[4:]
         ok, msg = await add_cart(ctx, pid, qty=1, update=update)
         await q.answer(msg, show_alert=not ok)
         cat = (await get_products())[pid]["cat"]
-        await safe_edit(q, EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx), parse_mode="HTML")
+        await safe_edit(q, EMOJI.get(cat, cat), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
         return
-    
+
     if d.startswith("back_cat_"):
         cat = d.split("_")[2]
-        await safe_edit(q, EMOJI.get(cat, cat), reply_markup=kb_category(cat, ctx), parse_mode="HTML")
+        await safe_edit(q, EMOJI.get(cat, cat), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
         return
-    
+
     if d == "cart":
         await safe_edit(q, fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
         return
-    
+
     if d.startswith(("inc_", "dec_", "del_")):
         pid = d.split("_")[1]
         cart = ctx.user_data.get("cart", [])
@@ -767,12 +782,12 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             log.error(f"Error saving abandoned cart: {e}")
         await safe_edit(q, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
         return
-    
+
     if d in ["order_perugia", "order_italy"]:
         ctx.user_data["dest"] = "Perugia" if d == "order_perugia" else "Italy"
         await safe_edit(q, fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
         return
-    
+
     if d == "checkout":
         return await start_order(update, ctx)
 
