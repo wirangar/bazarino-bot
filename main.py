@@ -594,7 +594,6 @@ async def cmd_search(u, ctx: ContextTypes.DEFAULT_TYPE):
 # ───────────── Commands
 async def cmd_start(u, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["user_id"] = u.effective_user.id
-    await u.message.reply_sticker("CAACAgIAAxkBAAIB2mZ5z8q9Z2f3AAEyAAEyAAEyAAEyAgAB")
     await u.message.reply_html(m("WELCOME"), reply_markup=kb_main(ctx))
 
 async def cmd_about(u, ctx: ContextTypes.DEFAULT_TYPE):
@@ -605,12 +604,10 @@ async def cmd_privacy(u, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ───────────── App, webhook and FastAPI
 api = FastAPI()
-tg_app = ApplicationBuilder().token(TOKEN).build()
-bot = tg_app.bot
 
-@api.on_event("startup")
-async def _on_startup():
-    await tg_app.initialize()
+async def lifespan(app: FastAPI):
+    tg_app = ApplicationBuilder().token(TOKEN).build()
+    bot = tg_app.bot
     # اطمینان از فعال بودن JobQueue
     if not tg_app.job_queue:
         tg_app.job_queue = JobQueue()
@@ -639,14 +636,18 @@ async def _on_startup():
     webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
     await tg_app.bot.set_webhook(webhook_url)
     log.info(f"Webhook set to {webhook_url}")
+    yield  # نقطه شروع و پایان lifespan
+    await tg_app.shutdown()
 
-@api.post("/webhook/{secret}")
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/webhook/{secret}")
 async def wh(req: Request, secret: str):
     if secret != WEBHOOK_SECRET:
         log.error("Invalid webhook secret")
         raise HTTPException(status_code=403, detail="Invalid secret")
     try:
-        update = Update.de_json(await req.json(), tg_app.bot)
+        update = Update.de_json(await req.json(), bot)
         if not update:
             log.error("Invalid webhook update received")
             raise HTTPException(status_code=400, detail="Invalid update")
@@ -768,7 +769,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await start_order(update, ctx)
 
 def main():
-    uvicorn.run(api, host="0.0.0.0", port=PORT)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
     main()
