@@ -570,7 +570,89 @@ async def send_cart_reminder(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"Error sending cart reminders: {e}")
 
-# ───────────── Router
+# ───────────── /search
+from difflib import get_close_matches
+async def cmd_search(u, ctx: ContextTypes.DEFAULT_TYPE):
+    q = " ".join(ctx.args).lower()
+    if not q:
+        await u.message.reply_text(m("SEARCH_USAGE"))
+        return
+    hits = [(pid, p) for pid, p in get_products().items()
+            if q in p['fa'].lower() or q in p['it'].lower()
+            or get_close_matches(q, [p['fa'].lower() + " " + p['it'].lower()], cutoff=0.6)]
+    if not hits:
+        await u.message.reply_text(m("SEARCH_NONE"))
+        return
+    for pid, p in hits[:5]:
+        cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
+        btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}"))
+        if p["image_url"] and p["image_url"].strip():
+            await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
+        else:
+            await u.message.reply_text(cap, reply_markup=btn)
+
+# ───────────── Commands
+async def cmd_start(u, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["user_id"] = u.effective_user.id
+    await u.message.reply_sticker("CAACAgIAAxkBAAIB2mZ5z8q9Z2f3AAEyAAEyAAEyAAEyAgAB")
+    await u.message.reply_html(m("WELCOME"), reply_markup=kb_main(ctx))
+
+async def cmd_about(u, ctx: ContextTypes.DEFAULT_TYPE):
+    await u.message.reply_text(m("ABOUT_US"), disable_web_page_preview=True)
+
+async def cmd_privacy(u, ctx: ContextTypes.DEFAULT_TYPE):
+    await u.message.reply_text(m("PRIVACY"), disable_web_page_preview=True)
+
+# ───────────── App, webhook and FastAPI
+api = FastAPI()
+tg_app = ApplicationBuilder().token(TOKEN).build()
+bot = tg_app.bot
+
+@api.on_event("startup")
+async def _on_startup():
+    await tg_app.initialize()
+    job_queue = tg_app.job_queue
+    job_queue.run_daily(send_cart_reminder, time=dt.time(hour=18, minute=0))
+    job_queue.run_repeating(check_order_status, interval=600)  # هر 10 دقیقه
+    job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))  # بکاپ هفتگی
+    tg_app.add_handler(CommandHandler("start", cmd_start))
+    tg_app.add_handler(CommandHandler("search", cmd_search))
+    tg_app.add_handler(CommandHandler("about", cmd_about))
+    tg_app.add_handler(CommandHandler("privacy", cmd_privacy))
+    tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    tg_app.add_handler(ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_order, pattern="^checkout$")],
+        states={
+            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_phone)],
+            ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_address)],
+            ASK_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_postal)],
+            ASK_POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_discount)],
+            ASK_DISCOUNT: [MessageHandler(filters.TEXT | filters.COMMAND, ask_notes)],
+            ASK_NOTES: [MessageHandler(filters.TEXT | filters.COMMAND, confirm_order)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_order)]
+    ))
+    tg_app.add_handler(CallbackQueryHandler(router))
+    webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
+    await tg_app.bot.set_webhook(webhook_url)
+    log.info(f"Webhook set to {webhook_url}")
+
+@api.post("/webhook/{secret}")
+async def wh(req: Request, secret: str):
+    if secret != WEBHOOK_SECRET:
+        log.error("Invalid webhook secret")
+        raise HTTPException(status_code=403, detail="Invalid secret")
+    try:
+        update = Update.de_json(await req.json(), tg_app.bot)
+        if not update:
+            log.error("Invalid webhook update received")
+            raise HTTPException(status_code=400, detail="Invalid update")
+        await tg_app.process_update(update)
+        return {"ok": True}
+    except Exception as e:
+        log.error(f"Webhook error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     d = q.data
@@ -667,8 +749,6 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 abandoned_cart_ws.append_row,
                 [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                  ctx.user_data.get("user_id", update.effective_user.id),
- Shut down
-```python
                  json.dumps(cart)]
             )
         except Exception as e:
@@ -683,89 +763,6 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     
     if d == "checkout":
         return await start_order(update, ctx)
-
-# ───────────── /search
-from difflib import get_close_matches
-async def cmd_search(u, ctx: ContextTypes.DEFAULT_TYPE):
-    q = " ".join(ctx.args).lower()
-    if not q:
-        await u.message.reply_text(m("SEARCH_USAGE"))
-        return
-    hits = [(pid, p) for pid, p in get_products().items()
-            if q in p['fa'].lower() or q in p['it'].lower()
-            or get_close_matches(q, [p['fa'].lower() + " " + p['it'].lower()], cutoff=0.6)]
-    if not hits:
-        await u.message.reply_text(m("SEARCH_NONE"))
-        return
-    for pid, p in hits[:5]:
-        cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
-        btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}"))
-        if p["image_url"] and p["image_url"].strip():
-            await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
-        else:
-            await u.message.reply_text(cap, reply_markup=btn)
-
-# ───────────── Commands
-async def cmd_start(u, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data["user_id"] = u.effective_user.id
-    await u.message.reply_sticker("CAACAgIAAxkBAAIB2mZ5z8q9Z2f3AAEyAAEyAAEyAAEyAgAB")
-    await u.message.reply_html(m("WELCOME"), reply_markup=kb_main(ctx))
-
-async def cmd_about(u, ctx: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text(m("ABOUT_US"), disable_web_page_preview=True)
-
-async def cmd_privacy(u, ctx: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text(m("PRIVACY"), disable_web_page_preview=True)
-
-# ───────────── App, webhook and FastAPI
-api = FastAPI()
-tg_app = ApplicationBuilder().token(TOKEN).build()
-bot = tg_app.bot
-
-@api.on_event("startup")
-async def _on_startup():
-    await tg_app.initialize()
-    job_queue = tg_app.job_queue
-    job_queue.run_daily(send_cart_reminder, time=dt.time(hour=18, minute=0))
-    job_queue.run_repeating(check_order_status, interval=600)  # هر 10 دقیقه
-    job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))  # بکاپ هفتگی
-    tg_app.add_handler(CommandHandler("start", cmd_start))
-    tg_app.add_handler(CommandHandler("search", cmd_search))
-    tg_app.add_handler(CommandHandler("about", cmd_about))
-    tg_app.add_handler(CommandHandler("privacy", cmd_privacy))
-    tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    tg_app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_order, pattern="^checkout$")],
-        states={
-            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_phone)],
-            ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_address)],
-            ASK_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_postal)],
-            ASK_POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_discount)],
-            ASK_DISCOUNT: [MessageHandler(filters.TEXT | filters.COMMAND, ask_notes)],
-            ASK_NOTES: [MessageHandler(filters.TEXT | filters.COMMAND, confirm_order)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_order)]
-    ))
-    tg_app.add_handler(CallbackQueryHandler(router))
-    webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
-    await tg_app.bot.set_webhook(webhook_url)
-    log.info(f"Webhook set to {webhook_url}")
-
-@api.post("/webhook/{secret}")
-async def wh(req: Request, secret: str):
-    if secret != WEBHOOK_SECRET:
-        log.error("Invalid webhook secret")
-        raise HTTPException(status_code=403, detail="Invalid secret")
-    try:
-        update = Update.de_json(await req.json(), tg_app.bot)
-        if not update:
-            log.error("Invalid webhook update received")
-            raise HTTPException(status_code=400, detail="Invalid update")
-        await tg_app.process_update(update)
-        return {"ok": True}
-    except Exception as e:
-        log.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
 
 def main():
     uvicorn.run(api, host="0.0.0.0", port=PORT)
