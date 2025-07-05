@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bazarino Telegram Bot – Optimized Version
+Bazarino Telegram Bot – Optimized Version with Edit Option
 - Webhook via FastAPI on Render with secret token
 - Dynamic products from Google Sheets with versioned cache
 - Features: Invoice with Hafez quote, discount codes, order notes, abandoned cart reminders,
            photo upload (file_id), push notifications (preparing/shipped), weekly backup
 - Optimized for Render.com with Google Sheets
+- Removed strict input validation
+- Added order review and edit functionality
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from typing import Dict, Any, List
 import io
 import random
 import textwrap
+import re
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -60,7 +63,6 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
 
     header_color = (0, 128, 0)
     text_color = (0, 0, 0)
-    accent_color = (255, 215, 0)
     border_color = (0, 0, 0)
     beige = (245, 245, 220)
 
@@ -101,9 +103,12 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مقصد: {user_data['dest']}")), font=body_font_fa, fill=text_color, anchor="ra")
     draw.text((50, y), f"Destinazione: {user_data['dest']}", font=body_font_it, fill=text_color, anchor="la")
     y += 50
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"آدرس: {user_data['address']} | {user_data['postal']}")), font=body_font_fa, fill=text_color, anchor="ra")
-    draw.text((50, y), f"Indirizzo: {user_data['address']} | {user_data['postal']}", font=body_font_it, fill=text_color, anchor="la")
-    y += 50
+    address_fa = textwrap.wrap(f"آدرس: {user_data['address']} | {user_data['postal']}", width=50)
+    address_it = textwrap.wrap(f"Indirizzo: {user_data['address']} | {user_data['postal']}", width=50)
+    for fa_line, it_line in zip(address_fa, address_it):
+        draw.text((width - 50, y), get_display(arabic_reshaper.reshape(fa_line)), font=body_font_fa, fill=text_color, anchor="ra")
+        draw.text((50, y), it_line, font=body_font_it, fill=text_color, anchor="la")
+        y += 50
 
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape("محصولات:")), font=body_font_fa, fill=text_color, anchor="ra")
     draw.text((50, y), "Prodotti:", font=body_font_it, fill=text_color, anchor="la")
@@ -123,9 +128,12 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مجموع: {total:.2f}€")), font=body_font_fa, fill=text_color, anchor="ra")
     draw.text((50, y), f"Totale: {total:.2f}€", font=body_font_it, fill=text_color, anchor="la")
     y += 50
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"یادداشت: {user_data.get('notes', 'بدون یادداشت')}")), font=body_font_fa, fill=text_color, anchor="ra")
-    draw.text((50, y), f"Nota: {user_data.get('notes', 'Nessuna nota')}", font=body_font_it, fill=text_color, anchor="la")
-    y += 50
+    notes_fa = textwrap.wrap(f"یادداشت: {user_data.get('notes', 'بدون یادداشت')}", width=50)
+    notes_it = textwrap.wrap(f"Nota: {user_data.get('notes', 'Nessuna nota')}", width=50)
+    for fa_line, it_line in zip(notes_fa, notes_it):
+        draw.text((width - 50, y), get_display(arabic_reshaper.reshape(fa_line)), font=body_font_fa, fill=text_color, anchor="ra")
+        draw.text((50, y), it_line, font=body_font_it, fill=text_color, anchor="la")
+        y += 50
 
     draw.rectangle([(40, y - 10), (width - 40, y + 150)], outline=border_color, width=2, fill=beige)
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape("✨ فال حافظ:")), font=hafez_font_fa, fill=text_color, anchor="ra")
@@ -137,12 +145,12 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
     else:
         hafez = random.choice(HAFEZ_QUOTES)
     fa_lines = textwrap.wrap(hafez["fa"], width=50)
-    for line in fa_lines:
-        draw.text((width - 50, y), get_display(arabic_reshaper.reshape(line)), font=hafez_font_fa, fill=text_color, anchor="ra")
-        y += 30
     it_lines = textwrap.wrap(hafez["it"], width=50)
-    for line in it_lines:
-        draw.text((50, y), line, font=small_font_it, fill=text_color, anchor="la")
+    for fa_line in fa_lines:
+        draw.text((width - 50, y), get_display(arabic_reshaper.reshape(fa_line)), font=hafez_font_fa, fill=text_color, anchor="ra")
+        y += 30
+    for it_line in it_lines:
+        draw.text((50, y), it_line, font=small_font_it, fill=text_color, anchor="la")
         y += 30
 
     draw.rectangle([(0, height - 50), (width, height)], fill=header_color)
@@ -211,7 +219,6 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = os.getenv("BASE_URL").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "EhsaNegar1394")
 SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
-PRODUCT_WS = os.getenv("PRODUCT_WORKSHEET", "Sheet2")
 PORT = int(os.getenv("PORT", "8000"))
 
 # ───────────── Google Sheets
@@ -219,25 +226,25 @@ try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_path = os.getenv("GOOGLE_CREDS", "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json")
     try:
-        with open(creds_path, "r", encoding="utf-8") as f:
-            CREDS_JSON = json.load(f)
-    except FileNotFoundError:
-        log.error(f"Credentials file '{creds_path}' not found")
-        raise SystemExit(f"❗️ فایل احراز هویت '{creds_path}' یافت نشد.")
-    except json.JSONDecodeError as e:
-        log.error(f"Failed to parse credentials file '{creds_path}': {e}")
-        raise SystemExit(f"❗️ خطا در تجزیه فایل احراز هویت '{creds_path}': {e}")
+        if os.path.exists(creds_path):
+            with open(creds_path, "r", encoding="utf-8") as f:
+                CREDS_JSON = json.load(f)
+        else:
+            CREDS_JSON = json.loads(os.getenv("GOOGLE_CREDS"))
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        log.error(f"Failed to load credentials: {e}")
+        raise SystemExit(f"❗️ خطا در بارگذاری احراز هویت Google: {e}")
     gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(CREDS_JSON, scope))
     try:
         wb = gc.open(SPREADSHEET)
     except gspread.exceptions.SpreadsheetNotFound:
-        log.error(f"Spreadsheet '{SPREADSHEET}' not found. Please check the SPREADSHEET_NAME and access permissions.")
+        log.error(f"Spreadsheet '{SPREADSHEET}' not found")
         raise SystemExit(f"❗️ فایل Google Spreadsheet با نام '{SPREADSHEET}' یافت نشد.")
     try:
         orders_ws = wb.worksheet(SHEET_CONFIG["orders"]["name"])
         products_ws = wb.worksheet(SHEET_CONFIG["products"]["name"])
     except gspread.exceptions.WorksheetNotFound as e:
-        log.error(f"Worksheet not found: {e}. Check config.yaml for correct worksheet names.")
+        log.error(f"Worksheet not found: {e}")
         raise SystemExit(f"❗️ خطا در دسترسی به worksheet: {e}")
     try:
         abandoned_cart_ws = wb.worksheet(SHEET_CONFIG["abandoned_carts"]["name"])
@@ -292,28 +299,36 @@ async def load_products() -> Dict[str, Dict[str, Any]]:
         raise SystemExit(f"❗️ خطا در بارگذاری محصولات از Google Sheets: {e}")
 
 async def load_discounts():
-    try:
-        records = await asyncio.to_thread(discounts_ws.get_all_records)
-        required_cols = ["code", "discount_percent", "valid_until", "is_active"]
-        if records and not all(col in records[0] for col in required_cols):
-            missing = [col for col in required_cols if col not in records[0]]
-            log.error(f"Missing required columns in discounts worksheet: {missing}")
+    for attempt in range(3):
+        try:
+            records = await asyncio.to_thread(discounts_ws.get_all_records)
+            required_cols = ["code", "discount_percent", "valid_until", "is_active"]
+            if records and not all(col in records[0] for col in required_cols):
+                missing = [col for col in required_cols if col not in records[0]]
+                log.error(f"Missing required columns in discounts worksheet: {missing}")
+                return {}
+            discounts = {}
+            for r in records:
+                try:
+                    discounts[r["code"]] = dict(
+                        discount_percent=float(r["discount_percent"]),
+                        valid_until=r["valid_until"],
+                        is_active=r["is_active"].lower() == "true"
+                    )
+                except (ValueError, KeyError) as e:
+                    log.error(f"Invalid discount data in row: {r}, error: {e}")
+                    continue
+            return discounts
+        except gspread.exceptions.APIError as e:
+            log.warning(f"API error loading discounts, attempt {attempt + 1}: {e}")
+            if attempt < 2:
+                await asyncio.sleep(2)
+            else:
+                log.error(f"Failed to load discounts after 3 attempts: {e}")
+                return {}
+        except Exception as e:
+            log.error(f"Error loading discounts: {e}")
             return {}
-        discounts = {}
-        for r in records:
-            try:
-                discounts[r["code"]] = dict(
-                    discount_percent=float(r["discount_percent"]),
-                    valid_until=r["valid_until"],
-                    is_active=r["is_active"].lower() == "true"
-                )
-            except (ValueError, KeyError) as e:
-                log.error(f"Invalid discount data in row: {r}, error: {e}")
-                continue
-        return discounts
-    except Exception as e:
-        log.error(f"Error loading discounts: {e}")
-        return {}
 
 async def get_products():
     try:
@@ -335,9 +350,13 @@ async def get_products():
         raise
 
 EMOJI = {
-    "rice": "🍚 برنج / Riso", "beans": "🥣 حبوبات / Legumi", "spice": "🌿 ادویه / Spezie",
-    "nuts": "🥜 خشکبار / Frutta secca", "drink": "🧃 نوشیدنی / Bevande",
-    "canned": "🥫 کنسرو / Conserve", "sweet": "🍬 شیرینی / Dolci"
+    "rice": "🍚 برنج / Riso",
+    "beans": "🥣 حبوبات / Legumi",
+    "spice": "🌿 ادویه / Spezie",
+    "nuts": "🥜 خشکبار / Frutta secca",
+    "drink": "🧃 نوشیدنی / Bevande",
+    "canned": "🥫 کنسرو / Conserve",
+    "sweet": "🍬 شیرینی / Dolci"
 }
 
 # ───────────── Helpers
@@ -361,19 +380,20 @@ async def safe_edit(q, *a, **k):
 
 async def alert_admin(pid, stock):
     if stock <= LOW_STOCK_TH and ADMIN_ID:
-        for _ in range(3):
+        for attempt in range(3):
             try:
                 await bot.send_message(ADMIN_ID, f"⚠️ موجودی کم {stock}: {(await get_products())[pid]['fa']}")
                 log.info(f"Low stock alert sent for {(await get_products())[pid]['fa']}")
                 break
             except Exception as e:
-                log.error(f"Alert fail attempt: {e}")
-                await asyncio.sleep(1)
+                log.error(f"Alert fail attempt {attempt + 1}: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1)
 
 # ───────────── Keyboards
 async def kb_main(ctx):
     try:
-        cats = {p["cat"] for p in (await get_products()).values()}
+        cats = sorted({p["cat"] for p in (await get_products()).values()})
         rows = [[InlineKeyboardButton(EMOJI.get(c, c), callback_data=f"cat_{c}")] for c in cats]
         cart = ctx.user_data.get("cart", [])
         cart_summary = f"{m('BTN_CART')} ({cart_count(ctx)} آیتم - {cart_total(cart):.2f}€)" if cart else m("BTN_CART")
@@ -381,12 +401,8 @@ async def kb_main(ctx):
             InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
             InlineKeyboardButton("🔥 پرفروش‌ها", callback_data="bestsellers")
         ])
-        rows.append([
-            InlineKeyboardButton(cart_summary, callback_data="cart")
-        ])
-        rows.append([
-            InlineKeyboardButton("📞 پشتیبانی", callback_data="support")
-        ])
+        rows.append([InlineKeyboardButton(cart_summary, callback_data="cart")])
+        rows.append([InlineKeyboardButton("📞 پشتیبانی", callback_data="support")])
         return InlineKeyboardMarkup(rows)
     except Exception as e:
         log.error(f"Error in kb_main: {e}")
@@ -395,7 +411,7 @@ async def kb_main(ctx):
 async def kb_category(cat, ctx):
     try:
         rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")]
-                for pid, p in (await get_products()).items() if p["cat"] == cat]
+                for pid, p in sorted((await get_products()).items(), key=lambda x: x[1]["fa"]) if p["cat"] == cat]
         rows.append([
             InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
             InlineKeyboardButton(m("BTN_BACK"), callback_data="back")
@@ -405,9 +421,9 @@ async def kb_category(cat, ctx):
         log.error(f"Error in kb_category: {e}")
         raise
 
-def kb_product(pid):
+async def kb_product(pid):
     try:
-        p = get_products._data[pid] if hasattr(get_products, "_data") else (asyncio.run(get_products()))[pid]
+        p = (await get_products())[pid]
         return InlineKeyboardMarkup([
             [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}")],
             [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{p['cat']}")]
@@ -416,7 +432,7 @@ def kb_product(pid):
         log.error(f"Error in kb_product: {e}")
         raise
 
-def kb_cart(cart):
+async def kb_cart(cart):
     try:
         rows = []
         for it in cart:
@@ -428,8 +444,8 @@ def kb_cart(cart):
                 InlineKeyboardButton("❌", callback_data=f"del_{pid}")
             ])
         rows.append([
-            InlineKeyboardButton("📍 پروجا", callback_data="order_perugia"),
-            InlineKeyboardButton("📦 ایتالیا", callback_data="order_italy")
+            InlineKeyboardButton(m("BTN_ORDER_PERUGIA"), callback_data="order_perugia"),
+            InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
         ])
         rows.append([
             InlineKeyboardButton(m("BTN_CONTINUE"), callback_data="checkout"),
@@ -440,7 +456,7 @@ def kb_cart(cart):
         log.error(f"Error in kb_cart: {e}")
         raise
 
-def kb_support():
+async def kb_support():
     try:
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("📷 ارسال تصویر", callback_data="upload_photo")],
@@ -448,6 +464,21 @@ def kb_support():
         ])
     except Exception as e:
         log.error(f"Error in kb_support: {e}")
+        raise
+
+async def kb_review_order():
+    try:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ تأیید و ثبت سفارش", callback_data="confirm_order")],
+            [InlineKeyboardButton("✏️ ویرایش نام", callback_data="edit_name")],
+            [InlineKeyboardButton("✏️ ویرایش شماره تلفن", callback_data="edit_phone")],
+            [InlineKeyboardButton("✏️ ویرایش آدرس", callback_data="edit_address")],
+            [InlineKeyboardButton("✏️ ویرایش کد پستی", callback_data="edit_postal")],
+            [InlineKeyboardButton("✏️ ویرایش یادداشت", callback_data="edit_notes")],
+            [InlineKeyboardButton("❌ لغو سفارش", callback_data="cancel_order")]
+        ])
+    except Exception as e:
+        log.error(f"Error in kb_review_order: {e}")
         raise
 
 # ───────────── Cart operations
@@ -467,7 +498,7 @@ async def add_cart(ctx, pid, qty=1, update=None):
             cur["qty"] += qty
         else:
             cart.append(dict(id=pid, fa=p["fa"], it=p["it"], price=p["price"], weight=p["weight"], qty=qty))
-        await alert_admin(pid, stock)
+        await alert_admin(pid, stock - qty)
         try:
             await asyncio.to_thread(
                 abandoned_cart_ws.append_row,
@@ -503,6 +534,7 @@ def fmt_cart(cart):
 async def update_stock(cart):
     try:
         records = await asyncio.to_thread(products_ws.get_all_records)
+        prods = await get_products()
         for it in cart:
             pid = it["id"]
             qty = it["qty"]
@@ -511,39 +543,48 @@ async def update_stock(cart):
                     new = int(row["stock"]) - qty
                     if new < 0:
                         log.error(f"Cannot update stock for {pid}: negative stock")
-                        return False
+                        return False, f"❌ موجودی {prods[pid]['fa']} کافی نیست."
                     await asyncio.to_thread(products_ws.update_cell, idx, 10, new)
-                    (await get_products())[pid]["stock"] = new
+                    prods[pid]["stock"] = new
                     log.info(f"Updated stock for {pid}: {new}")
-        return True
+        return True, None
     except gspread.exceptions.APIError as e:
         log.error(f"Google Sheets API error during stock update: {e}")
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در به‌روزرسانی موجودی: {e}")
-        return False
+        return False, "❗️ خطا در به‌روزرسانی موجودی. لطفاً دوباره تلاش کنید."
     except Exception as e:
         log.error(f"Stock update error: {e}")
-        return False
+        return False, "❗️ خطا در به‌روزرسانی موجودی."
 
 # ───────────── Order States
-ASK_NAME, ASK_PHONE, ASK_ADDRESS, ASK_POSTAL, ASK_DISCOUNT, ASK_NOTES = range(6)
+ASK_NAME, ASK_PHONE, ASK_ADDRESS, ASK_POSTAL, ASK_DISCOUNT, ASK_NOTES, REVIEW_ORDER = range(7)
 
 # ───────────── Order Process
 async def skip_discount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         ctx.user_data["discount_code"] = None
-        await update.message.reply_text(m("INPUT_NOTES"))
+        await update.message.reply_text(m("INPUT_NOTES"), reply_markup=ReplyKeyboardRemove())
         return ASK_NOTES
     except Exception as e:
         log.error(f"Error in skip_discount: {e}")
-        await update.message.reply_text("❗️ خطا در پرش کد تخفیف. لطفاً دوباره امتحان کنید.")
+        await update.message.reply_text("❗️ خطا در پرش کد تخفیف. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+
+async def skip_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        ctx.user_data["notes"] = ""
+        return await review_order(update, ctx)
+    except Exception as e:
+        log.error(f"Error in skip_notes: {e}")
+        await update.message.reply_text("❗️ خطا در پرش یادداشت. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         q = update.callback_query
         if not ctx.user_data.get("dest"):
-            await q.message.reply_text(m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+            await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=await kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
             return
         ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
         ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
@@ -565,522 +606,505 @@ async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def ask_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        ctx.user_data["name"] = update.message.text.strip()
-        await update.message.reply_text(m("INPUT_PHONE"))
+        name = update.message.text.strip()
+        if not name:
+            await update.message.reply_text("❗️ لطفاً نام و نام خانوادگی خود را وارد کنید.\nInserisci nome e cognome.")
+            return ASK_NAME
+        ctx.user_data["name"] = name
+        await update.message.reply_text(m("INPUT_PHONE"), reply_markup=ReplyKeyboardRemove())
         return ASK_PHONE
     except Exception as e:
         log.error(f"Error in ask_phone: {e}")
-        await update.message.reply_text("❗️ خطا در ثبت نام. لطفاً دوباره امتحان کنید.")
+        await update.message.reply_text("❗️ خطا در ثبت نام. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def ask_address(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        ctx.user_data["phone"] = update.message.text.strip()
-        await update.message.reply_text(m("INPUT_ADDRESS"))
+        phone = update.message.text.strip()
+        if not phone:
+            await update.message.reply_text("❗️ لطفاً شماره تلفن خود را وارد کنید.\nInserisci il numero di telefono.")
+            return ASK_PHONE
+        ctx.user_data["phone"] = phone
+        await update.message.reply_text(m("INPUT_ADDRESS"), reply_markup=ReplyKeyboardRemove())
         return ASK_ADDRESS
     except Exception as e:
         log.error(f"Error in ask_address: {e}")
-        await update.message.reply_text("❗️ خطا در ثبت شماره تلفن. لطفاً دوباره امتحان کنید.")
+        await update.message.reply_text("❗️ خطا در ثبت شماره تلفن. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def ask_postal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        ctx.user_data["address"] = update.message.text.strip()
-        await update.message.reply_text(m("INPUT_POSTAL"))
+        address = update.message.text.strip()
+        if not address:
+            await update.message.reply_text("❗️ لطفاً آدرس کامل خود را وارد کنید.\nInserisci l'indirizzo completo.")
+            return ASK_ADDRESS
+        ctx.user_data["address"] = address
+        await update.message.reply_text(m("INPUT_POSTAL"), reply_markup=ReplyKeyboardRemove())
         return ASK_POSTAL
     except Exception as e:
         log.error(f"Error in ask_postal: {e}")
-        await update.message.reply_text("❗️ خطا در ثبت آدرس. لطفاً دوباره امتحان کنید.")
+        await update.message.reply_text("❗️ خطا در ثبت آدرس. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def ask_discount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        ctx.user_data["postal"] = update.message.text.strip()
-        await update.message.reply_text("🎁 کد تخفیف دارید؟ وارد کنید یا /skip را بزنید.\nHai un codice sconto? Inseriscilo o premi /skip.")
+        postal = update.message.text.strip()
+        if not postal:
+            await update.message.reply_text("❗️ لطفاً کد پستی خود را وارد کنید.\nInserisci il CAP.")
+            return ASK_POSTAL
+        ctx.user_data["postal"] = postal
+        await update.message.reply_text("🎁 کد تخفیف دارید؟ وارد کنید یا /skip را بزنید.\nHai un codice sconto? Inseriscilo o premi /skip.", reply_markup=ReplyKeyboardRemove())
         return ASK_DISCOUNT
     except Exception as e:
         log.error(f"Error in ask_discount: {e}")
-        await update.message.reply_text("❗️ خطا در ثبت کد پستی. لطفاً دوباره امتحان کنید.")
+        await update.message.reply_text("❗️ خطا در ثبت کد پستی. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def ask_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        if update.message.text == "/skip":
-            ctx.user_data["discount_code"] = None
+        code = update.message.text.strip()
+        discounts = await load_discounts()
+        if code in discounts and discounts[code]["is_active"] and dt.datetime.strptime(discounts[code]["valid_until"], "%Y-%m-%d") >= dt.datetime.utcnow():
+            ctx.user_data["discount_code"] = code
         else:
-            code = update.message.text.strip()
-            discounts = await load_discounts()
-            if code in discounts and discounts[code]["is_active"] and dt.datetime.strptime(discounts[code]["valid_until"], "%Y-%m-%d") >= dt.datetime.utcnow():
-                ctx.user_data["discount_code"] = code
-            else:
-                await update.message.reply_text("❌ کد تخفیف نامعتبر است. لطفاً دوباره وارد کنید یا /skip کنید.\nCodice sconto non valido.")
-                return ASK_DISCOUNT
-        await update.message.reply_text(m("INPUT_NOTES"))
+            await update.message.reply_text("❌ کد تخفیف نامعتبر است. لطفاً دوباره وارد کنید یا /skip کنید.\nCodice sconto non valido.", reply_markup=ReplyKeyboardRemove())
+            return ASK_DISCOUNT
+        await update.message.reply_text(m("INPUT_NOTES"), reply_markup=ReplyKeyboardRemove())
         return ASK_NOTES
     except Exception as e:
         log.error(f"Error in ask_notes: {e}")
-        await update.message.reply_text("❗️ خطا در بررسی کد تخفیف. لطفاً دوباره امتحان کنید.")
+        await update.message.reply_text("❗️ خطا در بررسی کد تخفیف. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
-async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def review_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        if update.message.text == "/skip":
-            ctx.user_data["notes"] = ""
-        else:
+        if update.message.text != "/skip":
             ctx.user_data["notes"] = update.message.text.strip()
         cart = ctx.user_data.get("cart", [])
         if not cart:
             await update.message.reply_text(m("CART_EMPTY"), reply_markup=ReplyKeyboardRemove())
             ctx.user_data.clear()
             return ConversationHandler.END
+        summary = [
+            "📝 **خلاصه سفارش / Riepilogo ordine:**",
+            f"👤 نام / Nome: {ctx.user_data['name']}",
+            f"📞 تلفن / Telefono: {ctx.user_data['phone']}",
+            f"📍 آدرس / Indirizzo: {ctx.user_data['address']}",
+            f"🏷 کد پستی / CAP: {ctx.user_data['postal']}",
+            f"📍 مقصد / Destinazione: {ctx.user_data['dest']}",
+            f"🎁 کد تخفیف / Codice sconto: {ctx.user_data.get('discount_code', 'بدون کد / Nessun codice')}",
+            f"📝 یادداشت / Nota: {ctx.user_data.get('notes', 'بدون یادداشت / Nessuna nota')}",
+            "",
+            fmt_cart(cart)
+        ]
+        await update.message.reply_text("\n".join(summary), reply_markup=await kb_review_order(), parse_mode="HTML")
+        return REVIEW_ORDER
+    except Exception as e:
+        log.error(f"Error in review_order: {e}")
+        await update.message.reply_text("❗️ خطا در نمایش خلاصه سفارش. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
 
-        if not await update_stock(cart):
-            await update.message.reply_text(m("STOCK_EMPTY"), reply_markup=ReplyKeyboardRemove())
+async def edit_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE, field: str, prompt: str, next_state):
+    try:
+        q = update.callback_query
+        await q.message.delete()
+        await ctx.bot.send_message(
+            chat_id=q.message.chat.id,
+            text=prompt,
+            reply_markup=ReplyKeyboardRemove()
+        )
+        ctx.user_data["edit_field"] = field
+        return next_state
+    except Exception as e:
+        log.error(f"Error in edit_field: {e}")
+        await q.message.reply_text("❗️ خطا در ویرایش اطلاعات. لطفاً دوباره امتحان کنید.")
+        return ConversationHandler.END
+
+async def edit_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    return await edit_field(update, ctx, "name", m("INPUT_NAME"), ASK_NAME)
+
+async def edit_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    return await edit_field(update, ctx, "phone", m("INPUT_PHONE"), ASK_PHONE)
+
+async def edit_address(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    return await edit_field(update, ctx, "address", m("INPUT_ADDRESS"), ASK_ADDRESS)
+
+async def edit_postal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    return await edit_field(update, ctx, "postal", m("INPUT_POSTAL"), ASK_POSTAL)
+
+async def edit_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    return await edit_field(update, ctx, "notes", m("INPUT_NOTES"), ASK_NOTES)
+
+async def save_edited_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        field = ctx.user_data.get("edit_field")
+        value = update.message.text.strip()
+        if not value and field != "notes":
+            await update.message.reply_text(f"❗️ لطفاً مقدار معتبر وارد کنید.\nInserisci un valore valido.")
+            return ctx.user_data.get("state", REVIEW_ORDER)
+        ctx.user_data[field] = value if field != "notes" or value else ""
+        cart = ctx.user_data.get("cart", [])
+        summary = [
+            "📝 **خلاصه سفارش / Riepilogo ordine:**",
+            f"👤 نام / Nome: {ctx.user_data['name']}",
+            f"📞 تلفن / Telefono: {ctx.user_data['phone']}",
+            f"📍 آدرس / Indirizzo: {ctx.user_data['address']}",
+            f"🏷 کد پستی / CAP: {ctx.user_data['postal']}",
+            f"📍 مقصد / Destinazione: {ctx.user_data['dest']}",
+            f"🎁 کد تخفیف / Codice sconto: {ctx.user_data.get('discount_code', 'بدون کد / Nessun codice')}",
+            f"📝 یادداشت / Nota: {ctx.user_data.get('notes', 'بدون یادداشت / Nessuna nota')}",
+            "",
+            fmt_cart(cart)
+        ]
+        await update.message.reply_text("\n".join(summary), reply_markup=await kb_review_order(), parse_mode="HTML")
+        return REVIEW_ORDER
+    except Exception as e:
+        log.error(f"Error in save_edited_field: {e}")
+        await update.message.reply_text("❗️ خطا در ذخیره اطلاعات ویرایش‌شده. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+
+async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        q = update.callback_query
+        cart = ctx.user_data.get("cart", [])
+        if not cart:
+            await q.message.reply_text(m("CART_EMPTY"), reply_markup=ReplyKeyboardRemove())
             ctx.user_data.clear()
             return ConversationHandler.END
 
-        order_id = str(uuid.uuid4())[:8]
-        ts = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        success, error = await update_stock(cart)
+        if not success:
+            await q.message.reply_text(error, reply_markup=ReplyKeyboardRemove())
+            return ConversationHandler.END
+
         total = cart_total(cart)
         discount = 0
         if ctx.user_data.get("discount_code"):
             discounts = await load_discounts()
-            discount = total * (discounts[ctx.user_data["discount_code"]]["discount_percent"] / 100)
-            total -= discount
-        address_full = f"{ctx.user_data['address']} | {ctx.user_data['postal']}"
+            code = ctx.user_data["discount_code"]
+            if code in discounts and discounts[code]["is_active"]:
+                discount = total * (discounts[code]["discount_percent"] / 100)
+                total -= discount
+
+        order_id = str(uuid.uuid4())[:8]
+        invoice = await generate_invoice(order_id, ctx.user_data, cart, total, discount)
+        order_data = [
+            order_id,
+            dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            ctx.user_data["user_id"],
+            ctx.user_data["handle"],
+            ctx.user_data["name"],
+            ctx.user_data["phone"],
+            ctx.user_data["address"],
+            ctx.user_data["postal"],
+            ctx.user_data["dest"],
+            json.dumps(cart),
+            total,
+            ctx.user_data.get("discount_code", ""),
+            discount,
+            ctx.user_data.get("notes", ""),
+            "pending"
+        ]
+
         try:
-            for it in cart:
-                await asyncio.to_thread(
-                    orders_ws.append_row,
-                    [ts, order_id, ctx.user_data["user_id"], ctx.user_data["handle"],
-                     ctx.user_data["name"], ctx.user_data["phone"], address_full,
-                     ctx.user_data["dest"], it["id"], it["fa"], it["qty"], it["price"],
-                     it["qty"] * it["price"], ctx.user_data["notes"],
-                     ctx.user_data.get("discount_code", ""), discount, "preparing", "FALSE"]
-                )
-            log.info(f"Order {order_id} saved to Google Sheets for user {ctx.user_data['handle']}")
-            invoice_buffer = await generate_invoice(order_id, ctx.user_data, cart, total, discount)
-            await update.message.reply_photo(
-                photo=invoice_buffer,
-                caption=f"{m('ORDER_CONFIRMED')}\n\n📍 مقصد / Destinazione: {ctx.user_data['dest']}\n💶 مجموع / Totale: {total:.2f}€\n🎁 تخفیف / Sconto: {discount:.2f}€\n📝 یادداشت / Nota: {ctx.user_data['notes'] or 'بدون یادداشت'}",
-                reply_markup=ReplyKeyboardRemove()
-            )
+            await asyncio.to_thread(orders_ws.append_row, order_data)
+            log.info(f"Order {order_id} saved to Google Sheets")
         except Exception as e:
             log.error(f"Error saving order {order_id}: {e}")
-            await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
-            ctx.user_data.clear()
+            await q.message.reply_text("❗️ خطا در ثبت سفارش. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
 
-        if promo := MSG.get("PROMO_AFTER_ORDER"):
-            await update.message.reply_text(promo, disable_web_page_preview=True)
-        if ADMIN_ID:
-            msg = [f"🆕 سفارش / Ordine {order_id}", f"{ctx.user_data['name']} — {total:.2f}€",
-                   f"🎁 تخفیف / Sconto: {discount:.2f}€ ({ctx.user_data.get('discount_code', 'بدون کد')})",
-                   f"📝 یادداشت / Nota: {ctx.user_data['notes'] or 'بدون یادداشت'}"] + \
-                  [f"▫️ {i['qty']}× {i['fa']}" for i in cart]
-            try:
-                invoice_buffer.seek(0)
-                await bot.send_photo(ADMIN_ID, photo=invoice_buffer, caption="\n".join(msg))
-                log.info(f"Admin notified for order {order_id}")
-            except Exception as e:
-                log.error(f"Failed to notify admin for order {order_id}: {e}")
         try:
-            await asyncio.to_thread(abandoned_cart_ws.clear)
+            await q.message.delete()
+            await ctx.bot.send_photo(
+                chat_id=q.message.chat.id,
+                photo=invoice,
+                caption=m("ORDER_CONFIRMED").format(order_id=order_id),
+                parse_mode="HTML"
+            )
+            await ctx.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"🆕 سفارش جدید #{order_id}\nنام: {ctx.user_data['name']}\nمقصد: {ctx.user_data['dest']}\nجمع: {total:.2f}€",
+                parse_mode="HTML"
+            )
+            ctx.user_data.clear()
+            return ConversationHandler.END
         except Exception as e:
-            log.error(f"Error clearing abandoned carts: {e}")
-        ctx.user_data.clear()
-        return ConversationHandler.END
+            log.error(f"Error sending invoice: {e}")
+            await q.message.reply_text("❗️ خطا در ارسال فاکتور. لطفاً با پشتیبانی تماس بگیرید.", reply_markup=ReplyKeyboardRemove())
+            return ConversationHandler.END
     except Exception as e:
         log.error(f"Error in confirm_order: {e}")
-        await update.message.reply_text("❗️ خطا در ثبت سفارش. لطفاً دوباره امتحان کنید.")
-        ctx.user_data.clear()
+        await q.message.reply_text("❗️ خطا در تأیید سفارش. لطفاً دوباره امتحان کنید.")
         return ConversationHandler.END
 
 async def cancel_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
+        q = update.callback_query
+        await q.message.reply_text(m("ORDER_CANCELLED"), reply_markup=ReplyKeyboardRemove())
         ctx.user_data.clear()
-        await update.message.reply_text(m("ORDER_CANCELLED"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
     except Exception as e:
         log.error(f"Error in cancel_order: {e}")
-        await update.message.reply_text("❗️ خطا در لغو سفارش. لطفاً دوباره امتحان کنید.")
+        await q.message.reply_text("❗️ خطا در لغو سفارش. لطفاً دوباره امتحان کنید.")
         return ConversationHandler.END
 
-# ───────────── Photo Upload
-async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+# ───────────── Main Handlers
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        if not ctx.user_data.get("awaiting_photo"):
-            return
-        photo = update.message.photo[-1]
-        if photo.file_size > 2 * 1024 * 1024:
-            await update.message.reply_text(m("ERROR_FILE_SIZE"), reply_markup=await kb_main(ctx))
-            ctx.user_data["awaiting_photo"] = False
-            return
-        file = await photo.get_file()
-        try:
-            await asyncio.to_thread(
-                uploads_ws.append_row,
-                [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                 update.effective_user.id,
-                 f"@{update.effective_user.username or '-'}",
-                 file.file_id]
-            )
-            await bot.send_photo(
-                ADMIN_ID,
-                file.file_id,
-                caption=f"تصویر از کاربر @{update.effective_user.username or update.effective_user.id}\n📝 توضیح: {ctx.user_data.get('photo_note', 'بدون توضیح')}"
-            )
-            await update.message.reply_text(m("PHOTO_UPLOADED"))
-            ctx.user_data["awaiting_photo"] = False
-            ctx.user_data["photo_note"] = ""
-            await update.message.reply_text(m("SUPPORT_MESSAGE"), reply_markup=await kb_main(ctx))
-        except Exception as e:
-            log.error(f"Error handling photo upload: {e}")
-            await update.message.reply_text(m("ERROR_UPLOAD"), reply_markup=await kb_main(ctx))
+        await update.message.reply_text(m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
     except Exception as e:
-        log.error(f"Error in handle_photo: {e}")
-        await update.message.reply_text("❗️ خطا در آپلود تصویر. لطفاً دوباره امتحان کنید.")
-        ctx.user_data["awaiting_photo"] = False
+        log.error(f"Error in start: {e}")
+        await update.message.reply_text("❗️ خطا در شروع. لطفاً دوباره امتحان کنید.")
 
-# ───────────── Push Notifications for Order Status
-async def check_order_status(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        last_checked_row = getattr(check_order_status, "_last_checked_row", 1)
-        shipped_cells = await asyncio.to_thread(orders_ws.findall, "shipped")
-        preparing_cells = await asyncio.to_thread(orders_ws.findall, "preparing")
-        for cell in shipped_cells + preparing_cells:
-            if cell.row <= last_checked_row:
-                continue
-            row_data = await asyncio.to_thread(orders_ws.row_values, cell.row)
-            if len(row_data) < 18 or row_data[17] == "TRUE":
-                continue
-            user_id = int(row_data[2])
-            order_id = row_data[1]
-            status = row_data[16]
-            msg = {
-                "preparing": f"📦 سفارش شما (#{order_id}) در حال آماده‌سازی است!\nIl tuo ordine (#{order_id}) è in preparazione!",
-                "shipped": f"🚚 سفارش شما (#{order_id}) ارسال شد!\nIl tuo ordine (#{order_id}) è stato spedito!"
-            }[status]
-            await context.bot.send_message(user_id, msg, reply_markup=await kb_main(context))
-            await asyncio.to_thread(orders_ws.update_cell, cell.row, 18, "TRUE")
-            log.info(f"Sent {status} notification for order {order_id} to user {user_id}")
-        check_order_status._last_checked_row = max(last_checked_row, max((c.row for c in shipped_cells + preparing_cells), default=1))
-    except Exception as e:
-        log.error(f"Error checking order status: {e}")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در بررسی وضعیت سفارشات: {e}")
-
-# ───────────── Backup Google Sheets
-async def backup_sheets(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        sheets = [orders_ws, products_ws, discounts_ws, abandoned_cart_ws, uploads_ws]
-        for sheet in sheets:
-            records = await asyncio.to_thread(sheet.get_all_values)
-            csv_content = "\n".join([",".join(row) for row in records])
-            csv_file = io.BytesIO(csv_content.encode("utf-8"))
-            csv_file.name = f"{sheet.title}_backup_{dt.datetime.utcnow().strftime('%Y%m%d')}.csv"
-            await context.bot.send_document(ADMIN_ID, document=csv_file, caption=f"📊 بکاپ {sheet.title} - {dt.datetime.utcnow().strftime('%Y-%m-%d')}")
-            log.info(f"Backup sent for {sheet.title}")
-    except Exception as e:
-        log.error(f"Error creating backup: {e}")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در ایجاد بکاپ: {e}")
-
-# ───────────── Abandoned Cart Reminder
-async def send_cart_reminder(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        records = await asyncio.to_thread(abandoned_cart_ws.get_all_records)
-        for record in records:
-            cart = json.loads(record["cart"])
-            user_id = int(record["user_id"])
-            if cart:
-                await context.bot.send_message(
-                    user_id,
-                    f"🛒 سبد خرید شما هنوز منتظر شماست!\nHai lasciato qualcosa nel carrello!\n{fmt_cart(cart)}\n👉 برای تکمیل سفارش: /start",
-                    reply_markup=await kb_main(context)
-                )
-        await asyncio.to_thread(abandoned_cart_ws.clear)
-    except Exception as e:
-        log.error(f"Error sending cart reminders: {e}")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در ارسال یادآور سبد خرید: {e}")
-
-# ───────────── /search
-from difflib import get_close_matches
-async def cmd_search(u, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        q = " ".join(ctx.args).lower()
-        if not q:
-            await u.message.reply_text(m("SEARCH_USAGE"))
-            return
-        hits = [(pid, p) for pid, p in (await get_products()).items()
-                if q in p['fa'].lower() or q in p['it'].lower()
-                or get_close_matches(q, [p['fa'].lower() + " " + p['it'].lower()], cutoff=0.6)]
-        if not hits:
-            await u.message.reply_text(m("SEARCH_NONE"))
-            return
-        for pid, p in hits[:5]:
-            cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
-            btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}"))
-            if p["image_url"] and p["image_url"].strip():
-                await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
-            else:
-                await u.message.reply_text(cap, reply_markup=btn)
-    except Exception as e:
-        log.error(f"Error in cmd_search: {e}")
-        await u.message.reply_text("❗️ خطا در جستجو. لطفاً دوباره امتحان کنید.")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در /search: {e}")
-
-# ───────────── Commands
-async def cmd_start(u, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        ctx.user_data["user_id"] = u.effective_user.id
-        await u.message.reply_html(m("WELCOME"), reply_markup=await kb_main(ctx))
-    except Exception as e:
-        log.error(f"Error in cmd_start: {e}")
-        await u.message.reply_text("❗️ خطایی در بارگذاری منو رخ داد. لطفاً بعداً امتحان کنید یا با پشتیبانی تماس بگیرید.\nErrore nel caricamento del menu. Riprova più tardi o contatta il supporto.")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در /start: {e}")
-        raise
-
-async def cmd_about(u, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        await u.message.reply_text(m("ABOUT_US"), disable_web_page_preview=True)
-    except Exception as e:
-        log.error(f"Error in cmd_about: {e}")
-        await u.message.reply_text("❗️ خطا در نمایش اطلاعات. لطفاً دوباره امتحان کنید.")
-
-async def cmd_privacy(u, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        await u.message.reply_text(m("PRIVACY"), disable_web_page_preview=True)
-    except Exception as e:
-        log.error(f"Error in cmd_privacy: {e}")
-        await u.message.reply_text("❗️ خطا در نمایش سیاست حریم خصوصی. لطفاً دوباره امتحان کنید.")
-
-# ───────────── Router
-async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         q = update.callback_query
-        d = q.data
-        await q.answer()
-
-        if d == "back":
+        data = q.data
+        if data == "back":
             await safe_edit(q, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
-            return
-
-        if d == "support":
-            await safe_edit(q, m("SUPPORT_MESSAGE"), reply_markup=kb_support(), parse_mode="HTML")
-            return
-
-        if d == "upload_photo":
-            ctx.user_data["awaiting_photo"] = True
-            await safe_edit(q, m("UPLOAD_PHOTO"), reply_markup=kb_support())
-            return
-
-        if d == "bestsellers":
-            bestsellers = [(pid, p) for pid, p in (await get_products()).items() if p.get("is_bestseller", False)]
-            if not bestsellers:
-                await safe_edit(q, "🔥 در حال حاضر محصول پرفروشی وجود ندارد.\nNessun prodotto più venduto al momento.", reply_markup=await kb_main(ctx), parse_mode="HTML")
+        elif data.startswith("cat_"):
+            cat = data[4:]
+            await safe_edit(q, m("CATEGORY").format(cat=EMOJI.get(cat, cat)), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
+        elif data.startswith("show_"):
+            pid = data[5:]
+            prods = await get_products()
+            if pid not in prods:
+                await safe_edit(q, m("STOCK_EMPTY"), reply_markup=await kb_main(ctx), parse_mode="HTML")
                 return
-            rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")] for pid, p in bestsellers]
-            rows.append([InlineKeyboardButton(m("BTN_BACK"), callback_data="back")])
-            await safe_edit(q, "🔥 محصولات پرفروش / Più venduti", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
-            return
-
-        if d == "search":
-            await safe_edit(q, m("SEARCH_USAGE"), reply_markup=await kb_main(ctx))
-            return
-
-        if d.startswith("cat_"):
-            cat = d[4:]
-            await safe_edit(q, EMOJI.get(cat, cat), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
-            return
-
-        if d.startswith("show_"):
-            pid = d[5:]
-            p = (await get_products())[pid]
-            cap = f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\n{p['price']}€ / {p['weight']}\n||موجودی / Stock:|| {p['stock']}"
-            try:
+            p = prods[pid]
+            text = m("PRODUCT").format(
+                fa=p["fa"], it=p["it"], brand=p["brand"], desc=p["description"],
+                weight=p["weight"], price=p["price"], stock=p["stock"]
+            )
+            if p["image_url"]:
                 await q.message.delete()
-            except Exception as e:
-                log.error(f"Error deleting previous message: {e}")
-            if p["image_url"] and p["image_url"].strip():
                 await ctx.bot.send_photo(
                     chat_id=q.message.chat.id,
                     photo=p["image_url"],
-                    caption=cap,
-                    reply_markup=kb_product(pid),
+                    caption=text,
+                    reply_markup=await kb_product(pid),
                     parse_mode="HTML"
                 )
             else:
-                await ctx.bot.send_message(
-                    chat_id=q.message.chat.id,
-                    text=cap,
-                    reply_markup=kb_product(pid),
-                    parse_mode="HTML"
-                )
-            return
-
-        if d.startswith("add_"):
-            pid = d[4:]
-            ok, msg = await add_cart(ctx, pid, qty=1, update=update)
-            await q.answer(msg, show_alert=not ok)
-            if ok:
-                cat = (await get_products())[pid]["cat"]
-                try:
-                    await q.message.delete()
-                except Exception as e:
-                    log.error(f"Error deleting product message: {e}")
-                await ctx.bot.send_message(
-                    chat_id=q.message.chat.id,
-                    text=EMOJI.get(cat, cat),
-                    reply_markup=await kb_category(cat, ctx),
-                    parse_mode="HTML"
-                )
-            return
-
-        if d.startswith("back_cat_"):
-            cat = d.split("_")[2]
-            try:
-                await q.message.delete()
-            except Exception as e:
-                log.error(f"Error deleting product message: {e}")
-            await ctx.bot.send_message(
-                chat_id=q.message.chat.id,
-                text=EMOJI.get(cat, cat),
-                reply_markup=await kb_category(cat, ctx),
-                parse_mode="HTML"
-            )
-            return
-
-        if d == "cart":
+                await safe_edit(q, text, reply_markup=await kb_product(pid), parse_mode="HTML")
+        elif data.startswith("add_"):
+            pid = data[4:]
+            success, msg = await add_cart(ctx, pid, update=update)
+            await safe_edit(q, msg, reply_markup=await kb_product(pid), parse_mode="HTML")
+        elif data.startswith("inc_"):
+            pid = data[4:]
+            success, msg = await add_cart(ctx, pid, update=update)
+            await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=await kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+        elif data.startswith("dec_"):
+            pid = data[4:]
             cart = ctx.user_data.get("cart", [])
-            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(cart)}", reply_markup=kb_cart(cart), parse_mode="HTML")
-            return
-
-        if d.startswith(("inc_", "dec_", "del_")):
-            pid = d.split("_")[1]
-            cart = ctx.user_data.get("cart", [])
-            it = next((i for i in cart if i["id"] == pid), None)
-            if not it:
-                return
-            if d.startswith("inc_"):
-                await add_cart(ctx, pid, 1, update=update)
-            elif d.startswith("dec_"):
-                it["qty"] = max(1, it["qty"] - 1)
-            else:
-                cart.remove(it)
-            try:
+            item = next((i for i in cart if i["id"] == pid), None)
+            if item:
+                item["qty"] -= 1
+                if item["qty"] <= 0:
+                    cart.remove(item)
                 await asyncio.to_thread(
                     abandoned_cart_ws.append_row,
-                    [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                     ctx.user_data.get("user_id", update.effective_user.id),
-                     json.dumps(cart)]
+                    [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), ctx.user_data.get("user_id", update.effective_user.id), json.dumps(cart)]
                 )
-            except Exception as e:
-                log.error(f"Error saving abandoned cart: {e}")
-            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(cart)}", reply_markup=kb_cart(cart), parse_mode="HTML")
-            return
-
-        if d in ["order_perugia", "order_italy"]:
-            ctx.user_data["dest"] = "Perugia" if d == "order_perugia" else "Italy"
-            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(ctx.user_data.get('cart', []))}", reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
-            return
-
-        if d == "checkout":
-            return await start_order(update, ctx)
+            await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(cart), reply_markup=await kb_cart(cart), parse_mode="HTML")
+        elif data.startswith("del_"):
+            pid = data[4:]
+            cart = ctx.user_data.get("cart", [])
+            cart[:] = [i for i in cart if i["id"] != pid]
+            await asyncio.to_thread(
+                abandoned_cart_ws.append_row,
+                [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), ctx.user_data.get("user_id", update.effective_user.id), json.dumps(cart)]
+            )
+            await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(cart), reply_markup=await kb_cart(cart), parse_mode="HTML")
+        elif data == "cart":
+            await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=await kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+        elif data == "support":
+            await safe_edit(q, m("SUPPORT"), reply_markup=await kb_support(), parse_mode="HTML")
+        elif data == "upload_photo":
+            await q.message.reply_text(m("SEND_PHOTO"), reply_markup=ReplyKeyboardRemove())
+        elif data == "bestsellers":
+            prods = await get_products()
+            best = [p for p in prods.values() if p["is_bestseller"]]
+            if not best:
+                await safe_edit(q, m("NO_BESTSELLERS"), reply_markup=await kb_main(ctx), parse_mode="HTML")
+                return
+            rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")]
+                    for pid, p in sorted(prods.items(), key=lambda x: x[1]["fa"]) if p["is_bestseller"]]
+            rows.append([InlineKeyboardButton(m("BTN_BACK"), callback_data="back")])
+            await safe_edit(q, m("BESTSELLERS"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+        elif data == "search":
+            await q.message.reply_text(m("SEARCH"), reply_markup=ReplyKeyboardRemove())
+        elif data == "order_perugia":
+            ctx.user_data["dest"] = "Perugia"
+            await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=await kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+        elif data == "order_italy":
+            ctx.user_data["dest"] = "Italy"
+            await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=await kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+        elif data == "checkout":
+            if not ctx.user_data.get("cart"):
+                await safe_edit(q, m("CART_EMPTY"), reply_markup=await kb_main(ctx), parse_mode="HTML")
+                return
+            if not ctx.user_data.get("dest"):
+                await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=await kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+                return
+            await start_order(update, ctx)
+        elif data == "confirm_order":
+            await confirm_order(update, ctx)
+        elif data == "edit_name":
+            await edit_name(update, ctx)
+        elif data == "edit_phone":
+            await edit_phone(update, ctx)
+        elif data == "edit_address":
+            await edit_address(update, ctx)
+        elif data == "edit_postal":
+            await edit_postal(update, ctx)
+        elif data == "edit_notes":
+            await edit_notes(update, ctx)
+        elif data == "cancel_order":
+            await cancel_order(update, ctx)
     except Exception as e:
-        log.error(f"Error in router: {e}")
+        log.error(f"Error in callback_handler: {e}")
         await q.message.reply_text("❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در router: {e}")
 
-# ───────────── App, webhook and FastAPI
-async def post_init(app: Application):
+async def search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        log.info("Application initialized")
-        webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
-        await app.bot.set_webhook(webhook_url)
-        log.info(f"Webhook set to {webhook_url}")
+        query = update.message.text.strip().lower()
+        prods = await get_products()
+        matches = [p for p in prods.values() if query in p["fa"].lower() or query in p["it"].lower()]
+        if not matches:
+            await update.message.reply_text(m("NO_RESULTS"), reply_markup=await kb_main(ctx), parse_mode="HTML")
+            return
+        rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")]
+                for pid, p in prods.items() if p in matches]
+        rows.append([InlineKeyboardButton(m("BTN_BACK"), callback_data="back")])
+        await update.message.reply_text(m("SEARCH_RESULTS"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
     except Exception as e:
-        log.error(f"Failed to set webhook: {e}")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در تنظیم Webhook: {e}")
-        raise
+        log.error(f"Error in search: {e}")
+        await update.message.reply_text("❗️ خطا در جستجو. لطفاً دوباره امتحان کنید.")
 
-async def post_shutdown(app: Application):
-    log.info("Application shutting down")
+async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        await app.bot.delete_webhook()
+        photo = update.message.photo[-1]
+        file_id = photo.file_id
+        await asyncio.to_thread(
+            uploads_ws.append_row,
+            [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+             update.effective_user.id,
+             f"@{update.effective_user.username or '-'}",
+             file_id]
+        )
+        await ctx.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=file_id,
+            caption=f"📷 تصویر جدید از @{update.effective_user.username or update.effective_user.id}"
+        )
+        await update.message.reply_text(m("PHOTO_RECEIVED"), reply_markup=await kb_main(ctx), parse_mode="HTML")
     except Exception as e:
-        log.error(f"Failed to delete webhook: {e}")
+        log.error(f"Error in handle_photo: {e}")
+        await update.message.reply_text("❗️ خطا در دریافت تصویر. لطفاً دوباره امتحان کنید.")
 
-async def lifespan(app: FastAPI):
+async def abandoned_cart_reminder(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        records = await asyncio.to_thread(abandoned_cart_ws.get_all_records)
+        threshold = dt.datetime.utcnow() - dt.timedelta(hours=24)
+        for r in records:
+            ts = dt.datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S")
+            if ts < threshold:
+                user_id = int(r["user_id"])
+                cart = json.loads(r["cart"])
+                if cart:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=m("ABANDONED_CART").format(cart=fmt_cart(cart)),
+                        reply_markup=await kb_main(context),
+                        parse_mode="HTML"
+                    )
+        await asyncio.to_thread(abandoned_cart_ws.clear)
+        await asyncio.to_thread(abandoned_cart_ws.append_row, ["timestamp", "user_id", "cart"])
+    except Exception as e:
+        log.error(f"Error in abandoned_cart_reminder: {e}")
+
+async def weekly_backup(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        backup_name = f"Bazarino_Backup_{dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        await asyncio.to_thread(gc.copy, SPREADSHEET, backup_name)
+        log.info(f"Backup created: {backup_name}")
+        if ADMIN_ID:
+            await context.bot.send_message(ADMIN_ID, f"📥 نسخه پشتیبان جدید ایجاد شد: {backup_name}")
+    except Exception as e:
+        log.error(f"Error in weekly_backup: {e}")
+        if ADMIN_ID:
+            await context.bot.send_message(ADMIN_ID, f"⚠️ خطا در ایجاد نسخه پشتیبان: {e}")
+
+# ───────────── Webhook
+app = FastAPI()
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    try:
+        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+            raise HTTPException(status_code=403, detail="Invalid secret token")
+        update = await request.json()
+        await tg_app.process_update(Update.de_json(update, bot))
+        return {"status": "ok"}
+    except Exception as e:
+        log.error(f"Webhook error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ───────────── Main
+async def main():
     global tg_app, bot
     try:
-        builder = ApplicationBuilder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
-        tg_app = builder.build()
+        tg_app = ApplicationBuilder().token(TOKEN).build()
         bot = tg_app.bot
-        await tg_app.initialize()
-        if not tg_app.job_queue:
-            tg_app.job_queue = JobQueue()
-            await tg_app.job_queue.start()
-        job_queue = tg_app.job_queue
-        job_queue.run_daily(send_cart_reminder, time=dt.time(hour=18, minute=0))
-        job_queue.run_repeating(check_order_status, interval=600)
-        job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))
-        tg_app.add_handler(CommandHandler("start", cmd_start))
-        tg_app.add_handler(CommandHandler("search", cmd_search))
-        tg_app.add_handler(CommandHandler("about", cmd_about))
-        tg_app.add_handler(CommandHandler("privacy", cmd_privacy))
-        tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        tg_app.add_handler(ConversationHandler(
-            entry_points=[CallbackQueryHandler(start_order, pattern="^checkout$")],
+        await bot.set_webhook(f"{BASE_URL}/webhook", secret_token=WEBHOOK_SECRET)
+        log.info(f"Webhook set to {BASE_URL}/webhook")
+
+        conv_handler = ConversationHandler(
+            entry_points=[
+                CallbackQueryHandler(start_order, pattern="^(order_perugia|order_italy|checkout)$")
+            ],
             states={
                 ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_phone)],
                 ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_address)],
                 ASK_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_postal)],
                 ASK_POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_discount)],
                 ASK_DISCOUNT: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, ask_notes),
-                    CommandHandler("skip", skip_discount)
+                    MessageHandler(filters.Regex("^/skip$"), skip_discount),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, ask_notes)
                 ],
-                ASK_NOTES: [MessageHandler(filters.TEXT | filters.COMMAND, confirm_order)],
+                ASK_NOTES: [
+                    MessageHandler(filters.Regex("^/skip$"), skip_notes),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, review_order)
+                ],
+                REVIEW_ORDER: [
+                    CallbackQueryHandler(edit_name, pattern="^edit_name$"),
+                    CallbackQueryHandler(edit_phone, pattern="^edit_phone$"),
+                    CallbackQueryHandler(edit_address, pattern="^edit_address$"),
+                    CallbackQueryHandler(edit_postal, pattern="^edit_postal$"),
+                    CallbackQueryHandler(edit_notes, pattern="^edit_notes$"),
+                    CallbackQueryHandler(confirm_order, pattern="^confirm_order$"),
+                    CallbackQueryHandler(cancel_order, pattern="^cancel_order$"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, save_edited_field)
+                ]
             },
-            fallbacks=[CommandHandler("cancel", cancel_order)],
-            per_message=True
-        ))
-        tg_app.add_handler(CallbackQueryHandler(router))
-        yield
-        await tg_app.shutdown()
+            fallbacks=[CommandHandler("cancel", cancel_order)]
+        )
+
+        tg_app.add_handler(CommandHandler("start", start))
+        tg_app.add_handler(CallbackQueryHandler(callback_handler))
+        tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search))
+        tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        tg_app.job_queue.run_repeating(abandoned_cart_reminder, interval=24*3600, first=10)
+        tg_app.job_queue.run_repeating(weekly_backup, interval=7*24*3600, first=60)
+
+        log.info("Starting webhook server...")
+        await uvicorn.run(app, host="0.0.0.0", port=PORT)
     except Exception as e:
-        log.error(f"Error in lifespan: {e}")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در راه‌اندازی برنامه: {e}")
-        raise
-
-app = FastAPI(lifespan=lifespan)
-
-@app.post("/webhook/{secret}")
-async def wh(req: Request, secret: str):
-    try:
-        if secret != WEBHOOK_SECRET:
-            log.error("Invalid webhook secret")
-            raise HTTPException(status_code=403, detail="Invalid secret")
-        data = await req.json()
-        update = Update.de_json(data, bot)
-        if not update:
-            log.error("Invalid webhook update received")
-            raise HTTPException(status_code=400, detail="Invalid update")
-        await tg_app.process_update(update)
-        return {"ok": True}
-    except Exception as e:
-        log.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-def main():
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+        log.error(f"Startup error: {e}")
+        raise SystemExit(f"❗️ خطا در راه‌اندازی بات: {e}")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
