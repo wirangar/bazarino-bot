@@ -1187,14 +1187,58 @@ async def webhook(secret: str, request: Request):
         log.error(f"Webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Rest of the code (lifespan, uvicorn.run, etc.)
-@asynccontextmanager
-async def lifespan(fastapi_app: FastAPI):
-    # ... (بقیه کد lifespan)
+# ───────────── App, webhook and FastAPI
+app = FastAPI()
+
 # Root endpoint to handle GET /
 @app.get("/")
 async def root():
     return {"message": "Bazarino Telegram Bot is running. Use the Telegram bot to interact."}
+
+# Endpoint to check file existence
+@app.get("/check-files")
+async def check_files():
+    files = [
+        "config.yaml",
+        "messages.json",
+        "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json",
+        "fonts/Vazir.ttf",
+        "fonts/arial.ttf",
+        "fonts/Nastaliq.ttf",
+        "background_pattern.png",
+        "logo.png"
+    ]
+    result = {f: os.path.exists(f) for f in files}
+    return result
+
+# Endpoint to check Google Sheets connection
+@app.get("/check-sheets")
+async def check_sheets():
+    try:
+        wb = gc.open("Bazarnio Orders")
+        ws = wb.worksheet("Sheet2")
+        headers = ws.row_values(1)
+        return {"status": "success", "worksheet": ws.title, "headers": headers}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Webhook endpoint
+@app.post("/webhook/{secret}")
+async def webhook(secret: str, request: Request):
+    global tg_app
+    if secret != WEBHOOK_SECRET:
+        log.error(f"Invalid webhook secret: {secret}")
+        raise HTTPException(status_code=403, detail="Invalid secret")
+    if tg_app is None:
+        log.error("Webhook failed: tg_app is None, likely due to startup failure")
+        raise HTTPException(status_code=500, detail="Application not initialized")
+    try:
+        update = await request.json()
+        await tg_app.process_update(Update.de_json(update, bot))
+        return {"status": "ok"}
+    except Exception as e:
+        log.error(f"Webhook error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def post_init(app: Application):
     try:
@@ -1221,23 +1265,6 @@ async def post_shutdown(app: Application):
         await app.bot.delete_webhook()
     except Exception as e:
         log.error(f"Failed to delete webhook: {e}")
-
-@app.post("/webhook/{secret}")
-async def webhook(secret: str, request: Request):
-    global tg_app
-    if secret != WEBHOOK_SECRET:
-        log.error(f"Invalid webhook secret: {secret}")
-        raise HTTPException(status_code=403, detail="Invalid secret")
-    if tg_app is None:
-        log.error("Webhook failed: tg_app is None, likely due to startup failure")
-        raise HTTPException(status_code=500, detail="Application not initialized")
-    try:
-        update = await request.json()
-        await tg_app.process_update(Update.de_json(update, bot))
-        return {"status": "ok"}
-    except Exception as e:
-        log.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
