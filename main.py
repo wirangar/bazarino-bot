@@ -53,83 +53,94 @@ bot = None
 
 # ───────────── Generate Invoice
 async def generate_invoice(order_id, user_data, cart, total, discount):
-    width, height = 800, 1000
+    width, height = 800, 1200
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    header_color = (0, 128, 0)
+    header_color = (0, 100, 0)
     text_color = (0, 0, 0)
     accent_color = (255, 215, 0)
     border_color = (0, 0, 0)
     beige = (245, 245, 220)
+    footer_color = (0, 80, 0)
 
     try:
-        title_font = ImageFont.truetype("fonts/Vazir.ttf", 28)
-        body_font = ImageFont.truetype("fonts/Vazir.ttf", 22)
-        small_font = ImageFont.truetype("fonts/Vazir.ttf", 18)
-        latin_font = ImageFont.truetype("fonts/arial.ttf", 20)
+        title_font = ImageFont.truetype("fonts/Vazir.ttf", 30)
+        body_font = ImageFont.truetype("fonts/Vazir.ttf", 24)
+        small_font = ImageFont.truetype("fonts/Vazir.ttf", 20)
+        latin_font = ImageFont.truetype("fonts/arial.ttf", 22)
+        nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26)
     except Exception as e:
         log.error(f"Font loading error: {e}")
-        title_font = ImageFont.load_default(size=28)
-        body_font = ImageFont.load_default(size=22)
-        small_font = ImageFont.load_default(size=18)
-        latin_font = ImageFont.load_default(size=20)
-
-    draw.rectangle([(0, 0), (width, 80)], fill=header_color)
-    header_text = get_display(arabic_reshaper.reshape("فاکتور بازارینو / Fattura Bazarino"))
-    draw.text((width // 2, 40), header_text, fill=(255, 255, 255), font=title_font, anchor="mm")
+        title_font = ImageFont.load_default(size=30)
+        body_font = ImageFont.load_default(size=24)
+        small_font = ImageFont.load_default(size=20)
+        latin_font = ImageFont.load_default(size=22)
+        nastaliq_font = ImageFont.load_default(size=26)
 
     try:
-        logo = Image.open("logo.png").resize((80, 80))
-        img.paste(logo, (20, 10))
+        background = Image.open("background_pattern.png").resize((width, height))
+        img.paste(background, (0, 0), background.convert("RGBA"))
+    except Exception as e:
+        log.error(f"Background pattern loading error: {e}")
+
+    draw.rectangle([(0, 0), (width, 100)], fill=header_color)
+    header_text = get_display(arabic_reshaper.reshape("فاکتور بازارینو / Fattura Bazarino"))
+    draw.text((width // 2, 50), header_text, fill=(255, 255, 255), font=title_font, anchor="mm")
+
+    try:
+        logo = Image.open("logo.png").resize((100, 100), Image.Resampling.LANCZOS)
+        img.paste(logo, (20, 10), logo.convert("RGBA"))
     except Exception as e:
         log.error(f"Logo loading error: {e}")
 
-    y = 100
+    y = 120
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"شماره سفارش / Ordine #{order_id}")), font=body_font, fill=text_color, anchor="ra")
-    y += 40
+    y += 50
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"نام / Nome: {user_data['name']}")), font=body_font, fill=text_color, anchor="ra")
-    y += 40
+    y += 50
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مقصد / Destinazione: {user_data['dest']}")), font=body_font, fill=text_color, anchor="ra")
-    y += 40
+    y += 50
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"آدرس / Indirizzo: {user_data['address']} | {user_data['postal']}")), font=body_font, fill=text_color, anchor="ra")
-    y += 40
+    y += 50
 
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape("محصولات / Prodotti:")), font=body_font, fill=text_color, anchor="ra")
-    y += 40
-    draw.rectangle([(40, y - 10), (width - 40, y + 10 + len(cart) * 40)], outline=border_color, width=1)
+    y += 50
+    draw.rectangle([(40, y - 10), (width - 40, y + 10 + len(cart) * 50)], outline=border_color, width=2, fill=(255, 250, 240))
     for item in cart:
         item_text = get_display(arabic_reshaper.reshape(f"{item['qty']}× {item['fa']} — {item['qty'] * item['price']:.2f}€"))
-        draw.text((width - 50, y), item_text, font=body_font, fill=text_color, anchor="ra")
-        y += 40
-    y += 20
+        draw.text((width - 60, y), item_text, font=body_font, fill=text_color, anchor="ra")
+        draw.text((60, y), f"{item['it']}", font=latin_font, fill=text_color, anchor="la")
+        y += 50
+    y += 30
 
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"تخفیف / Sconto: {discount:.2f}€")), font=body_font, fill=text_color, anchor="ra")
-    y += 40
+    y += 50
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مجموع / Totale: {total:.2f}€")), font=body_font, fill=text_color, anchor="ra")
-    y += 40
+    y += 50
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"یادداشت / Nota: {user_data.get('notes', 'بدون یادداشت')}")), font=body_font, fill=text_color, anchor="ra")
-    y += 40
+    y += 50
 
-    draw.rectangle([(40, y - 10), (width - 40, y + 100)], outline=border_color, width=1, fill=beige)
+    draw.rectangle([(40, y - 20), (width - 40, y + 120)], outline=border_color, width=2, fill=(240, 230, 210))
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape("✨ فال حافظ / Fal di Hafez:")), font=small_font, fill=text_color, anchor="ra")
+    y += 30
     if not HAFEZ_QUOTES:
         log.error("No Hafez quotes defined in config.yaml")
         hafez = {"fa": "بدون نقل‌قول", "it": "Nessuna citazione"}
     else:
         hafez = random.choice(HAFEZ_QUOTES)
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape("✨ فال حافظ / Fal di Hafez:")), font=small_font, fill=text_color, anchor="ra")
-    y += 20
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(hafez["fa"])), font=small_font, fill=text_color, anchor="ra")
-    y += 30
-    draw.text((width - 50, y), hafez["it"], font=latin_font, fill=text_color, anchor="ra")
-    y += 30
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(hafez["fa"])), font=nastaliq_font, fill=text_color, anchor="ra")
+    y += 40
+    draw.text((50, y), hafez["it"], font=latin_font, fill=text_color, anchor="la")
+    y += 50
 
-    draw.rectangle([(0, height - 40), (width, height)], fill=header_color)
+    draw.rectangle([(0, height - 50), (width, height)], fill=footer_color)
     footer_text = get_display(arabic_reshaper.reshape("بازارینو - طعم ایران در ایتالیا"))
-    draw.text((width // 2, height - 20), footer_text, fill=(255, 255, 255), font=small_font, anchor="mm")
+    draw.text((width // 2, height - 25), footer_text, fill=(255, 255, 255), font=title_font, anchor="mm")
+    draw.text((width // 2, height - 10), "Bazarino - The Taste of Iran in Italy", fill=(255, 255, 255), font=latin_font, anchor="mm")
 
     buffer = io.BytesIO()
-    img.save(buffer, format="PNG")
+    img.save(buffer, format="PNG", quality=95)
     buffer.seek(0)
     return buffer
 
@@ -292,7 +303,6 @@ async def load_discounts():
         log.error(f"Error loading discounts: {e}")
         return {}
 
-# Versioned cache for products
 async def get_products():
     try:
         cell = await asyncio.to_thread(products_ws.acell, "L1")
@@ -387,14 +397,15 @@ def kb_product(pid):
         p = get_products._data[pid] if hasattr(get_products, "_data") else (asyncio.run(get_products()))[pid]
         return InlineKeyboardMarkup([
             [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}")],
-            [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{p['cat']}")]
+            [InlineKeyboardButton(m("BTN_BACK"), callback_data="back")]
         ])
     except Exception as e:
         log.error(f"Error in kb_product: {e}")
         raise
 
-def kb_cart(cart):
+def kb_cart(ctx):
     try:
+        cart = ctx.user_data.get("cart", [])
         rows = []
         for it in cart:
             pid = it["id"]
@@ -404,14 +415,23 @@ def kb_cart(cart):
                 InlineKeyboardButton("➖", callback_data=f"dec_{pid}"),
                 InlineKeyboardButton("❌", callback_data=f"del_{pid}")
             ])
-        rows.append([
-            InlineKeyboardButton(m("BTN_ORDER_PERUGIA"), callback_data="order_perugia"),
-            InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
-        ])
-        rows.append([
-            InlineKeyboardButton(m("BTN_CONTINUE"), callback_data="checkout"),
-            InlineKeyboardButton(m("BTN_BACK"), callback_data="back")
-        ])
+        if ctx.user_data.get("dest"):
+            rows.append([
+                InlineKeyboardButton(m("BTN_ORDER_PERUGIA"), callback_data="order_perugia"),
+                InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
+            ])
+            rows.append([
+                InlineKeyboardButton(m("BTN_CONTINUE"), callback_data="checkout"),
+                InlineKeyboardButton(m("BTN_BACK"), callback_data="back")
+            ])
+        else:
+            rows.append([
+                InlineKeyboardButton(m("BTN_ORDER_PERUGIA"), callback_data="order_perugia"),
+                InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
+            ])
+            rows.append([
+                InlineKeyboardButton(m("BTN_BACK"), callback_data="back")
+            ])
         return InlineKeyboardMarkup(rows)
     except Exception as e:
         log.error(f"Error in kb_cart: {e}")
@@ -444,7 +464,7 @@ async def add_cart(ctx, pid, qty=1, update=None):
             cur["qty"] += qty
         else:
             cart.append(dict(id=pid, fa=p["fa"], price=p["price"], weight=p["weight"], qty=qty))
-        await alert_admin(pid, stock - qty)  # Update stock alert
+        await alert_admin(pid, stock - qty)
         try:
             await asyncio.to_thread(
                 abandoned_cart_ws.append_row,
@@ -477,7 +497,7 @@ def fmt_cart(cart):
         return "❗️ خطا در نمایش سبد خرید."
 
 # ───────────── Stock update
-async def update_stock(cart):
+async to update_stock(cart):
     try:
         records = await asyncio.to_thread(products_ws.get_all_records)
         for it in cart:
@@ -511,8 +531,8 @@ async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         q = update.callback_query
         if not ctx.user_data.get("dest"):
-            await q.message.reply_text(m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
-            return
+            await q.message.reply_text(f"لطفاً مقصد را انتخاب کنید:\nScegli la destinazione:\n\n{fmt_cart(ctx.user_data.get('cart', []))}", reply_markup=kb_cart(ctx), parse_mode="HTML")
+            return ConversationHandler.END
         ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
         ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
         ctx.user_data["user_id"] = update.effective_user.id
@@ -680,7 +700,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not ctx.user_data.get("awaiting_photo"):
             return
         photo = update.message.photo[-1]
-        if photo.file_size > 2 * 1024 * 1024:  # حداکثر 2 مگابایت
+        if photo.file_size > 2 * 1024 * 1024:
             await update.message.reply_text(m("ERROR_FILE_SIZE"), reply_markup=await kb_main(ctx))
             ctx.user_data["awaiting_photo"] = False
             return
@@ -720,11 +740,11 @@ async def check_order_status(context: ContextTypes.DEFAULT_TYPE):
             if cell.row <= last_checked_row:
                 continue
             row_data = await asyncio.to_thread(orders_ws.row_values, cell.row)
-            if len(row_data) < 18 or row_data[17] == "TRUE":  # notified
+            if len(row_data) < 18 or row_data[17] == "TRUE":
                 continue
-            user_id = int(row_data[2])  # user_id
-            order_id = row_data[1]  # order_id
-            status = row_data[16]  # status
+            user_id = int(row_data[2])
+            order_id = row_data[1]
+            status = row_data[16]
             msg = {
                 "preparing": f"📦 سفارش شما (#{order_id}) در حال آماده‌سازی است!\nIl tuo ordine (#{order_id}) è in preparazione!",
                 "shipped": f"🚚 سفارش شما (#{order_id}) ارسال شد!\nIl tuo ordine (#{order_id}) è stato spedito!"
@@ -833,8 +853,12 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         data = query.data
 
+        if data != "back":
+            ctx.user_data["last_menu"] = data
+
         if data.startswith("cat_"):
             cat = data[4:]
+            ctx.user_data["current_cat"] = cat
             await safe_edit(query, f"دسته‌بندی: {EMOJI.get(cat, cat)}", reply_markup=await kb_category(cat, ctx))
 
         elif data.startswith("show_"):
@@ -845,6 +869,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 return
             p = prods[pid]
             cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
+            ctx.user_data["current_product"] = pid
             if p["image_url"] and p["image_url"].strip():
                 await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=kb_product(pid))
             else:
@@ -853,13 +878,16 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("add_"):
             pid = data[4:]
             success, msg = await add_cart(ctx, pid, update=update)
-            await safe_edit(query, msg, reply_markup=await kb_main(ctx))
+            prods = await get_products()
+            p = prods[pid]
+            cap = f"{msg}\n\n{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
+            await safe_edit(query, cap, reply-markup=kb_product(pid))
 
         elif data.startswith("inc_"):
             pid = data[4:]
             success, msg = await add_cart(ctx, pid, update=update)
             cart = ctx.user_data.get("cart", [])
-            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
+            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(ctx), parse_mode="HTML")
 
         elif data.startswith("dec_"):
             pid = data[4:]
@@ -869,31 +897,54 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 item["qty"] -= 1
             elif item:
                 cart.remove(item)
-            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
+            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(ctx), parse_mode="HTML")
 
         elif data.startswith("del_"):
             pid = data[4:]
             cart = ctx.user_data.get("cart", [])
             cart[:] = [i for i in cart if i["id"] != pid]
-            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
+            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(ctx), parse_mode="HTML")
 
         elif data == "cart":
             cart = ctx.user_data.get("cart", [])
-            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
+            if not ctx.user_data.get("dest"):
+                await safe_edit(query, f"لطفاً مقصد را انتخاب کنید:\nScegli la destinazione:\n\n{fmt_cart(cart)}", reply_markup=kb_cart(ctx), parse_mode="HTML")
+            else:
+                await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(ctx), parse_mode="HTML")
 
         elif data == "order_perugia":
             ctx.user_data["dest"] = "Perugia"
-            await safe_edit(query, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+            cart = ctx.user_data.get("cart", [])
+            await safe_edit(query, f"مقصد: Perugia\n\n{fmt_cart(cart)}", reply_markup=kb_cart(ctx), parse_mode="HTML")
 
         elif data == "order_italy":
             ctx.user_data["dest"] = "Italia"
-            await safe_edit(query, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+            cart = ctx.user_data.get("cart", [])
+            await safe_edit(query, f"مقصد: Italia\n\n{fmt_cart(cart)}", reply_markup=kb_cart(ctx), parse_mode="HTML")
 
         elif data == "back":
-            await safe_edit(query, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
+            last_menu = ctx.user_data.get("last_menu", "")
+            if last_menu.startswith("show_"):
+                pid = last_menu[5:]
+                prods = await get_products()
+                if pid in prods:
+                    p = prods[pid]
+                    cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
+                    await safe_edit(query, cap, reply_markup=kb_product(pid))
+                else:
+                    await safe_edit(query, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
+            elif last_menu.startswith("cat_"):
+                cat = last_menu[4:]
+                await safe_edit(query, f"دسته‌بندی: {EMOJI.get(cat, cat)}", reply_markup=await kb_category(cat, ctx))
+            elif last_menu == "cart":
+                cart = ctx.user_data.get("cart", [])
+                await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(ctx), parse_mode="HTML")
+            else:
+                await safe_edit(query, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
 
         elif data.startswith("back_cat_"):
             cat = data[9:]
+            ctx.user_data["current_cat"] = cat
             await safe_edit(query, f"دسته‌بندی: {EMOJI.get(cat, cat)}", reply_markup=await kb_category(cat, ctx))
 
         elif data == "bestsellers":
