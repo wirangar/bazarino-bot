@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bazarino Telegram Bot – Optimized Version with Edit Option
-- Webhook via FastAPI on Render with secret token
+Bazarino Telegram Bot – Optimized for Render.com
+- Webhook via FastAPI with secret token
 - Dynamic products from Google Sheets with versioned cache
-- Features: Invoice with Hafez quote, discount codes, order notes, abandoned cart reminders,
+- Features: Invoice with random Hafez quote, discount codes, order notes, abandoned cart reminders,
            photo upload (file_id), push notifications (preparing/shipped), weekly backup
-- Optimized for Render.com with Google Sheets
 - Removed strict input validation
 - Added order review and edit functionality
+- Compatible with provided config.yaml and messages.json
 """
 
 from __future__ import annotations
-import asyncio
-import datetime as dt
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -24,21 +22,23 @@ from typing import Dict, Any, List
 import io
 import random
 import textwrap
-import re
+import asyncio
+from datetime import datetime as dt, timedelta
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from fastapi import FastAPI, Request, HTTPException
-import uvicorn
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
     Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes,
-    ConversationHandler, MessageHandler, filters, JobQueue
+    ConversationHandler, MessageHandler, filters
 )
 from telegram.error import BadRequest, NetworkError
 from PIL import Image, ImageDraw, ImageFont
 import arabic_reshaper
 from bidi.algorithm import get_display
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 # Logging setup
 logging.basicConfig(
@@ -52,12 +52,14 @@ logging.basicConfig(
 log = logging.getLogger("bazarino")
 
 # Global variables
+app = FastAPI()
 tg_app = None
 bot = None
+scheduler = None
 
 # ───────────── Generate Invoice
 async def generate_invoice(order_id, user_data, cart, total, discount):
-    width, height = 1000, 1200
+    width, height = 1000, 1400  # Increased height for two-line Hafez quotes
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
 
@@ -73,12 +75,12 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
         body_font_it = ImageFont.truetype("fonts/Roboto.ttf", 26)
         small_font_it = ImageFont.truetype("fonts/Roboto.ttf", 22)
     except Exception as e:
-        log.error(f"Font loading error: {e}")
-        title_font_fa = ImageFont.load_default(size=36)
-        body_font_fa = ImageFont.load_default(size=28)
-        hafez_font_fa = ImageFont.load_default(size=24)
-        body_font_it = ImageFont.load_default(size=26)
-        small_font_it = ImageFont.load_default(size=22)
+        log.warning(f"Font loading error: {e}. Using default fonts.")
+        title_font_fa = ImageFont.load_default()
+        body_font_fa = ImageFont.load_default()
+        hafez_font_fa = ImageFont.load_default()
+        body_font_it = ImageFont.load_default()
+        small_font_it = ImageFont.load_default()
 
     draw.rectangle([(0, 0), (width, 100)], fill=header_color)
     header_text_fa = get_display(arabic_reshaper.reshape("فاکتور بازارینو"))
@@ -90,7 +92,7 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
         logo = Image.open("logo.png").resize((100, 100))
         img.paste(logo, (20, 10))
     except Exception as e:
-        log.error(f"Logo loading error: {e}")
+        log.warning(f"Logo loading error: {e}. Using text fallback.")
         draw.text((30, 50), get_display(arabic_reshaper.reshape("🍇 بازارینو")), fill=text_color, font=body_font_fa, anchor="lm")
 
     y = 120
@@ -135,7 +137,7 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
         draw.text((50, y), it_line, font=body_font_it, fill=text_color, anchor="la")
         y += 50
 
-    draw.rectangle([(40, y - 10), (width - 40, y + 150)], outline=border_color, width=2, fill=beige)
+    draw.rectangle([(40, y - 10), (width - 40, y + 200)], outline=border_color, width=2, fill=beige)
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape("✨ فال حافظ:")), font=hafez_font_fa, fill=text_color, anchor="ra")
     draw.text((50, y), "Fal di Hafez:", font=small_font_it, fill=text_color, anchor="la")
     y += 30
@@ -143,15 +145,15 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
         log.error("No Hafez quotes defined in config.yaml")
         hafez = {"fa": "بدون نقل‌قول", "it": "Nessuna citazione"}
     else:
-        hafez = random.choice(HAFEZ_QUOTES)
+        hafez = random.choice(HAFEZ_QUOTES)  # Random Hafez quote
     fa_lines = textwrap.wrap(hafez["fa"], width=50)
     it_lines = textwrap.wrap(hafez["it"], width=50)
     for fa_line in fa_lines:
         draw.text((width - 50, y), get_display(arabic_reshaper.reshape(fa_line)), font=hafez_font_fa, fill=text_color, anchor="ra")
-        y += 30
+        y += 40  # Increased spacing for two-line quotes
     for it_line in it_lines:
         draw.text((50, y), it_line, font=small_font_it, fill=text_color, anchor="la")
-        y += 30
+        y += 40
 
     draw.rectangle([(0, height - 50), (width, height)], fill=header_color)
     footer_text_fa = get_display(arabic_reshaper.reshape("بازارینو - طعم ایران در ایتالیا"))
@@ -170,7 +172,7 @@ try:
         CONFIG = yaml.safe_load(f)
     if not CONFIG or "sheets" not in CONFIG or "hafez_quotes" not in CONFIG:
         log.error("Invalid config.yaml: missing 'sheets' or 'hafez_quotes'")
-        raise SystemExit("❗️ فایل config.yaml نامعتبر است: کلیدهای 'sheets' یا 'hafez_quotes' وجود ندارند.")
+        raise SystemExit("❗️ فایل config.yaml نامعتبر است.")
 except FileNotFoundError:
     log.error("config.yaml not found")
     raise SystemExit("❗️ فایل config.yaml یافت نشد.")
@@ -180,7 +182,7 @@ HAFEZ_QUOTES = CONFIG["hafez_quotes"]
 required_sheets = ["orders", "products", "abandoned_carts", "discounts", "uploads"]
 for sheet in required_sheets:
     if sheet not in SHEET_CONFIG or "name" not in SHEET_CONFIG[sheet]:
-        log.error(f"Missing or invalid sheet configuration for '{sheet}' in config.yaml")
+        log.error(f"Missing sheet config for '{sheet}'")
         raise SystemExit(f"❗️ تنظیمات sheet '{sheet}' در config.yaml نامعتبر است.")
 
 # ───────────── Messages
@@ -192,39 +194,39 @@ except FileNotFoundError:
     raise SystemExit("❗️ فایل messages.json یافت نشد.")
 except json.JSONDecodeError as e:
     log.error(f"Invalid messages.json: {e}")
-    raise SystemExit("❗️ فایل messages.json نامعتبر است: خطا در تجزیه JSON")
+    raise SystemExit("❗️ فایل messages.json نامعتبر است.")
 
-def m(k: str) -> str:
-    return MSG.get(k, f"[{k}]")
+def m(k: str, **kwargs) -> str:
+    return MSG.get(k, f"[{k}]").format(**kwargs)
 
 # ───────────── ENV
 for v in ("TELEGRAM_TOKEN", "ADMIN_CHAT_ID", "BASE_URL"):
     if not os.getenv(v):
-        log.error(f"Missing environment variable: {v}")
+        log.error(f"Missing env var: {v}")
         raise SystemExit(f"❗️ متغیر محیطی {v} تنظیم نشده است.")
 
 try:
     ADMIN_ID = int(os.getenv("ADMIN_CHAT_ID"))
 except ValueError:
-    log.error("Invalid ADMIN_CHAT_ID: must be an integer")
-    raise SystemExit("❗️ ADMIN_CHAT_ID باید یک عدد صحیح باشد.")
+    log.error("Invalid ADMIN_CHAT_ID")
+    raise SystemExit("❗️ ADMIN_CHAT_ID باید عدد باشد.")
 
 try:
     LOW_STOCK_TH = int(os.getenv("LOW_STOCK_THRESHOLD", "3"))
 except ValueError:
-    log.error("Invalid LOW_STOCK_THRESHOLD: must be an integer")
-    raise SystemExit("❗️ LOW_STOCK_THRESHOLD باید یک عدد صحیح باشد.")
+    log.error("Invalid LOW_STOCK_THRESHOLD")
+    raise SystemExit("❗️ LOW_STOCK_THRESHOLD باید عدد باشد.")
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = os.getenv("BASE_URL").rstrip("/")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "EhsaNegar1394")
-SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
+SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarino Orders")
 PORT = int(os.getenv("PORT", "8000"))
 
 # ───────────── Google Sheets
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_path = os.getenv("GOOGLE_CREDS", "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json")
+    creds_path = os.getenv("GOOGLE_CREDS", "/etc/secrets/google_creds.json")
     try:
         if os.path.exists(creds_path):
             with open(creds_path, "r", encoding="utf-8") as f:
@@ -232,14 +234,14 @@ try:
         else:
             CREDS_JSON = json.loads(os.getenv("GOOGLE_CREDS"))
     except (FileNotFoundError, json.JSONDecodeError) as e:
-        log.error(f"Failed to load credentials: {e}")
+        log.error(f"Failed to load Google creds: {e}")
         raise SystemExit(f"❗️ خطا در بارگذاری احراز هویت Google: {e}")
     gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(CREDS_JSON, scope))
     try:
         wb = gc.open(SPREADSHEET)
     except gspread.exceptions.SpreadsheetNotFound:
         log.error(f"Spreadsheet '{SPREADSHEET}' not found")
-        raise SystemExit(f"❗️ فایل Google Spreadsheet با نام '{SPREADSHEET}' یافت نشد.")
+        raise SystemExit(f"❗️ فایل '{SPREADSHEET}' یافت نشد.")
     try:
         orders_ws = wb.worksheet(SHEET_CONFIG["orders"]["name"])
         products_ws = wb.worksheet(SHEET_CONFIG["products"]["name"])
@@ -259,18 +261,18 @@ try:
     except gspread.exceptions.WorksheetNotFound:
         uploads_ws = wb.add_worksheet(title=SHEET_CONFIG["uploads"]["name"], rows=1000, cols=4)
 except Exception as e:
-    log.error(f"Failed to initialize Google Sheets: {e}")
+    log.error(f"Failed to init Google Sheets: {e}")
     raise SystemExit(f"❗️ خطا در اتصال به Google Sheets: {e}")
 
 # ───────────── Google Sheets Data
 async def load_products() -> Dict[str, Dict[str, Any]]:
     try:
         records = await asyncio.to_thread(products_ws.get_all_records)
-        required_cols = ["id", "cat", "fa", "it", "brand", "description", "weight", "price"]
+        required_cols = ["id", "cat", "fa", "it", "brand", "description", "weight", "price", "stock"]
         if records and not all(col in records[0] for col in required_cols):
             missing = [col for col in required_cols if col not in records[0]]
-            log.error(f"Missing required columns in products worksheet: {missing}")
-            raise SystemExit(f"❗️ ستون‌های مورد نیاز در worksheet محصولات وجود ندارند: {missing}")
+            log.error(f"Missing columns in products: {missing}")
+            raise SystemExit(f"❗️ ستون‌های مورد نیاز در محصولات وجود ندارند: {missing}")
         products = {}
         for r in records:
             try:
@@ -283,20 +285,20 @@ async def load_products() -> Dict[str, Dict[str, Any]]:
                     weight=r["weight"],
                     price=float(r["price"]),
                     image_url=r.get("image_url") or None,
-                    stock=int(r.get("stock", 0)),
+                    stock=int(r["stock"]),
                     is_bestseller=r.get("is_bestseller", "FALSE").lower() == "true",
                     version=r.get("version", "0")
                 )
             except (ValueError, KeyError) as e:
-                log.error(f"Invalid product data in row: {r}, error: {e}")
+                log.error(f"Invalid product data: {r}, error: {e}")
                 continue
         if not products:
-            log.error("No valid products loaded from Google Sheets")
-            raise SystemExit("❗️ هیچ محصول معتبری از Google Sheets بارگذاری نشد.")
+            log.error("No valid products loaded")
+            raise SystemExit("❗️ هیچ محصولی بارگذاری نشد.")
         return products
     except Exception as e:
-        log.error(f"Error loading products from Google Sheets: {e}")
-        raise SystemExit(f"❗️ خطا در بارگذاری محصولات از Google Sheets: {e}")
+        log.error(f"Error loading products: {e}")
+        raise SystemExit(f"❗️ خطا در بارگذاری محصولات: {e}")
 
 async def load_discounts():
     for attempt in range(3):
@@ -305,7 +307,7 @@ async def load_discounts():
             required_cols = ["code", "discount_percent", "valid_until", "is_active"]
             if records and not all(col in records[0] for col in required_cols):
                 missing = [col for col in required_cols if col not in records[0]]
-                log.error(f"Missing required columns in discounts worksheet: {missing}")
+                log.error(f"Missing columns in discounts: {missing}")
                 return {}
             discounts = {}
             for r in records:
@@ -316,7 +318,7 @@ async def load_discounts():
                         is_active=r["is_active"].lower() == "true"
                     )
                 except (ValueError, KeyError) as e:
-                    log.error(f"Invalid discount data in row: {r}, error: {e}")
+                    log.error(f"Invalid discount data: {r}, error: {e}")
                     continue
             return discounts
         except gspread.exceptions.APIError as e:
@@ -324,7 +326,7 @@ async def load_discounts():
             if attempt < 2:
                 await asyncio.sleep(2)
             else:
-                log.error(f"Failed to load discounts after 3 attempts: {e}")
+                log.error(f"Failed to load discounts: {e}")
                 return {}
         except Exception as e:
             log.error(f"Error loading discounts: {e}")
@@ -337,11 +339,11 @@ async def get_products():
         if (not hasattr(get_products, "_data") or
             not hasattr(get_products, "_version") or
             get_products._version != current_version or
-            dt.datetime.utcnow() > getattr(get_products, "_ts", dt.datetime.min)):
+            dt.now() > getattr(get_products, "_ts", dt.min)):
             get_products._data = await load_products()
             get_products._version = current_version
-            get_products._ts = dt.datetime.utcnow() + dt.timedelta(seconds=60)
-            log.info(f"Loaded {len(get_products._data)} products from Google Sheets, version {current_version}")
+            get_products._ts = dt.now() + timedelta(seconds=60)
+            log.info(f"Loaded {len(get_products._data)} products, version {current_version}")
         return get_products._data
     except Exception as e:
         log.error(f"Error in get_products: {e}")
@@ -367,7 +369,7 @@ async def safe_edit(q, *a, **k):
     try:
         await q.edit_message_text(*a, **k)
     except BadRequest as e:
-        if "not modified" in str(e) or "no text in the message to edit" in str(e):
+        if "not modified" in str(e) or "no text" in str(e):
             try:
                 await q.message.delete()
             except Exception as del_e:
@@ -502,7 +504,7 @@ async def add_cart(ctx, pid, qty=1, update=None):
         try:
             await asyncio.to_thread(
                 abandoned_cart_ws.append_row,
-                [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                [dt.now().strftime("%Y-%m-%d %H:%M:%S"),
                  ctx.user_data.get("user_id", update.effective_user.id if update else 0),
                  json.dumps(cart)]
             )
@@ -511,7 +513,7 @@ async def add_cart(ctx, pid, qty=1, update=None):
         return True, m("CART_ADDED")
     except Exception as e:
         log.error(f"Error in add_cart: {e}")
-        return False, "❗️ خطا در افزودن به سبد خرید."
+        return False, m("ERROR_SHEET")
 
 def fmt_cart(cart):
     try:
@@ -528,7 +530,7 @@ def fmt_cart(cart):
         return "\n".join(lines)
     except Exception as e:
         log.error(f"Error in fmt_cart: {e}")
-        return "❗️ خطا در نمایش سبد خرید."
+        return m("ERROR_SHEET")
 
 # ───────────── Stock update
 async def update_stock(cart):
@@ -549,13 +551,13 @@ async def update_stock(cart):
                     log.info(f"Updated stock for {pid}: {new}")
         return True, None
     except gspread.exceptions.APIError as e:
-        log.error(f"Google Sheets API error during stock update: {e}")
+        log.error(f"Google Sheets API error: {e}")
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در به‌روزرسانی موجودی: {e}")
-        return False, "❗️ خطا در به‌روزرسانی موجودی. لطفاً دوباره تلاش کنید."
+        return False, m("ERROR_SHEET")
     except Exception as e:
         log.error(f"Stock update error: {e}")
-        return False, "❗️ خطا در به‌روزرسانی موجودی."
+        return False, m("ERROR_SHEET")
 
 # ───────────── Order States
 ASK_NAME, ASK_PHONE, ASK_ADDRESS, ASK_POSTAL, ASK_DISCOUNT, ASK_NOTES, REVIEW_ORDER = range(7)
@@ -568,7 +570,7 @@ async def skip_discount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ASK_NOTES
     except Exception as e:
         log.error(f"Error in skip_discount: {e}")
-        await update.message.reply_text("❗️ خطا در پرش کد تخفیف. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def skip_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -577,7 +579,7 @@ async def skip_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return await review_order(update, ctx)
     except Exception as e:
         log.error(f"Error in skip_notes: {e}")
-        await update.message.reply_text("❗️ خطا در پرش یادداشت. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -592,7 +594,7 @@ async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             await q.message.delete()
         except Exception as e:
-            log.error(f"Error deleting previous message in start_order: {e}")
+            log.error(f"Error deleting message in start_order: {e}")
         await ctx.bot.send_message(
             chat_id=q.message.chat.id,
             text=m("INPUT_NAME"),
@@ -601,79 +603,79 @@ async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ASK_NAME
     except Exception as e:
         log.error(f"Error in start_order: {e}")
-        await q.message.reply_text("❗️ خطا در شروع سفارش. لطفاً دوباره امتحان کنید.")
+        await q.message.reply_text(m("ERROR_SHEET"))
         return ConversationHandler.END
 
 async def ask_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         name = update.message.text.strip()
         if not name:
-            await update.message.reply_text("❗️ لطفاً نام و نام خانوادگی خود را وارد کنید.\nInserisci nome e cognome.")
+            await update.message.reply_text(m("INPUT_NAME"))
             return ASK_NAME
         ctx.user_data["name"] = name
         await update.message.reply_text(m("INPUT_PHONE"), reply_markup=ReplyKeyboardRemove())
         return ASK_PHONE
     except Exception as e:
         log.error(f"Error in ask_phone: {e}")
-        await update.message.reply_text("❗️ خطا در ثبت نام. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def ask_address(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         phone = update.message.text.strip()
         if not phone:
-            await update.message.reply_text("❗️ لطفاً شماره تلفن خود را وارد کنید.\nInserisci il numero di telefono.")
+            await update.message.reply_text(m("INPUT_PHONE"))
             return ASK_PHONE
         ctx.user_data["phone"] = phone
         await update.message.reply_text(m("INPUT_ADDRESS"), reply_markup=ReplyKeyboardRemove())
         return ASK_ADDRESS
     except Exception as e:
         log.error(f"Error in ask_address: {e}")
-        await update.message.reply_text("❗️ خطا در ثبت شماره تلفن. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def ask_postal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         address = update.message.text.strip()
         if not address:
-            await update.message.reply_text("❗️ لطفاً آدرس کامل خود را وارد کنید.\nInserisci l'indirizzo completo.")
+            await update.message.reply_text(m("INPUT_ADDRESS"))
             return ASK_ADDRESS
         ctx.user_data["address"] = address
         await update.message.reply_text(m("INPUT_POSTAL"), reply_markup=ReplyKeyboardRemove())
         return ASK_POSTAL
     except Exception as e:
         log.error(f"Error in ask_postal: {e}")
-        await update.message.reply_text("❗️ خطا در ثبت آدرس. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def ask_discount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         postal = update.message.text.strip()
         if not postal:
-            await update.message.reply_text("❗️ لطفاً کد پستی خود را وارد کنید.\nInserisci il CAP.")
+            await update.message.reply_text(m("INPUT_POSTAL"))
             return ASK_POSTAL
         ctx.user_data["postal"] = postal
-        await update.message.reply_text("🎁 کد تخفیف دارید؟ وارد کنید یا /skip را بزنید.\nHai un codice sconto? Inseriscilo o premi /skip.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("🎁 کد تخفیف دارید؟ وارد کنید یا /skip کنید.", reply_markup=ReplyKeyboardRemove())
         return ASK_DISCOUNT
     except Exception as e:
         log.error(f"Error in ask_discount: {e}")
-        await update.message.reply_text("❗️ خطا در ثبت کد پستی. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def ask_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         code = update.message.text.strip()
         discounts = await load_discounts()
-        if code in discounts and discounts[code]["is_active"] and dt.datetime.strptime(discounts[code]["valid_until"], "%Y-%m-%d") >= dt.datetime.utcnow():
+        if code in discounts and discounts[code]["is_active"] and dt.strptime(discounts[code]["valid_until"], "%Y-%m-%d") >= dt.now():
             ctx.user_data["discount_code"] = code
         else:
-            await update.message.reply_text("❌ کد تخفیف نامعتبر است. لطفاً دوباره وارد کنید یا /skip کنید.\nCodice sconto non valido.", reply_markup=ReplyKeyboardRemove())
+            await update.message.reply_text("❌ کد تخفیف نامعتبر است.", reply_markup=ReplyKeyboardRemove())
             return ASK_DISCOUNT
         await update.message.reply_text(m("INPUT_NOTES"), reply_markup=ReplyKeyboardRemove())
         return ASK_NOTES
     except Exception as e:
         log.error(f"Error in ask_notes: {e}")
-        await update.message.reply_text("❗️ خطا در بررسی کد تخفیف. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def review_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -692,8 +694,8 @@ async def review_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"📍 آدرس / Indirizzo: {ctx.user_data['address']}",
             f"🏷 کد پستی / CAP: {ctx.user_data['postal']}",
             f"📍 مقصد / Destinazione: {ctx.user_data['dest']}",
-            f"🎁 کد تخفیف / Codice sconto: {ctx.user_data.get('discount_code', 'بدون کد / Nessun codice')}",
-            f"📝 یادداشت / Nota: {ctx.user_data.get('notes', 'بدون یادداشت / Nessuna nota')}",
+            f"🎁 کد تخفیف / Codice sconto: {ctx.user_data.get('discount_code', 'بدون کد')}",
+            f"📝 یادداشت / Nota: {ctx.user_data.get('notes', 'بدون یادداشت')}",
             "",
             fmt_cart(cart)
         ]
@@ -701,7 +703,7 @@ async def review_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return REVIEW_ORDER
     except Exception as e:
         log.error(f"Error in review_order: {e}")
-        await update.message.reply_text("❗️ خطا در نمایش خلاصه سفارش. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def edit_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE, field: str, prompt: str, next_state):
@@ -714,10 +716,11 @@ async def edit_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE, field: str,
             reply_markup=ReplyKeyboardRemove()
         )
         ctx.user_data["edit_field"] = field
+        ctx.user_data["state"] = next_state
         return next_state
     except Exception as e:
         log.error(f"Error in edit_field: {e}")
-        await q.message.reply_text("❗️ خطا در ویرایش اطلاعات. لطفاً دوباره امتحان کنید.")
+        await q.message.reply_text(m("ERROR_SHEET"))
         return ConversationHandler.END
 
 async def edit_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -740,7 +743,7 @@ async def save_edited_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         field = ctx.user_data.get("edit_field")
         value = update.message.text.strip()
         if not value and field != "notes":
-            await update.message.reply_text(f"❗️ لطفاً مقدار معتبر وارد کنید.\nInserisci un valore valido.")
+            await update.message.reply_text(f"❗️ لطفاً مقدار معتبر وارد کنید.")
             return ctx.user_data.get("state", REVIEW_ORDER)
         ctx.user_data[field] = value if field != "notes" or value else ""
         cart = ctx.user_data.get("cart", [])
@@ -751,8 +754,8 @@ async def save_edited_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"📍 آدرس / Indirizzo: {ctx.user_data['address']}",
             f"🏷 کد پستی / CAP: {ctx.user_data['postal']}",
             f"📍 مقصد / Destinazione: {ctx.user_data['dest']}",
-            f"🎁 کد تخفیف / Codice sconto: {ctx.user_data.get('discount_code', 'بدون کد / Nessun codice')}",
-            f"📝 یادداشت / Nota: {ctx.user_data.get('notes', 'بدون یادداشت / Nessuna nota')}",
+            f"🎁 کد تخفیف / Codice sconto: {ctx.user_data.get('discount_code', 'بدون کد')}",
+            f"📝 یادداشت / Nota: {ctx.user_data.get('notes', 'بدون یادداشت')}",
             "",
             fmt_cart(cart)
         ]
@@ -760,7 +763,7 @@ async def save_edited_field(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return REVIEW_ORDER
     except Exception as e:
         log.error(f"Error in save_edited_field: {e}")
-        await update.message.reply_text("❗️ خطا در ذخیره اطلاعات ویرایش‌شده. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
 async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -790,7 +793,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         invoice = await generate_invoice(order_id, ctx.user_data, cart, total, discount)
         order_data = [
             order_id,
-            dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            dt.now().strftime("%Y-%m-%d %H:%M:%S"),
             ctx.user_data["user_id"],
             ctx.user_data["handle"],
             ctx.user_data["name"],
@@ -808,10 +811,10 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         try:
             await asyncio.to_thread(orders_ws.append_row, order_data)
-            log.info(f"Order {order_id} saved to Google Sheets")
+            log.info(f"Order {order_id} saved")
         except Exception as e:
             log.error(f"Error saving order {order_id}: {e}")
-            await q.message.reply_text("❗️ خطا در ثبت سفارش. لطفاً دوباره امتحان کنید.", reply_markup=ReplyKeyboardRemove())
+            await q.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
 
         try:
@@ -819,7 +822,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await ctx.bot.send_photo(
                 chat_id=q.message.chat.id,
                 photo=invoice,
-                caption=m("ORDER_CONFIRMED").format(order_id=order_id),
+                caption=m("ORDER_CONFIRMED", order_id=order_id),
                 parse_mode="HTML"
             )
             await ctx.bot.send_message(
@@ -831,11 +834,11 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
         except Exception as e:
             log.error(f"Error sending invoice: {e}")
-            await q.message.reply_text("❗️ خطا در ارسال فاکتور. لطفاً با پشتیبانی تماس بگیرید.", reply_markup=ReplyKeyboardRemove())
+            await q.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
             return ConversationHandler.END
     except Exception as e:
         log.error(f"Error in confirm_order: {e}")
-        await q.message.reply_text("❗️ خطا در تأیید سفارش. لطفاً دوباره امتحان کنید.")
+        await q.message.reply_text(m("ERROR_SHEET"))
         return ConversationHandler.END
 
 async def cancel_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -846,7 +849,7 @@ async def cancel_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     except Exception as e:
         log.error(f"Error in cancel_order: {e}")
-        await q.message.reply_text("❗️ خطا در لغو سفارش. لطفاً دوباره امتحان کنید.")
+        await q.message.reply_text(m("ERROR_SHEET"))
         return ConversationHandler.END
 
 # ───────────── Main Handlers
@@ -855,7 +858,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
     except Exception as e:
         log.error(f"Error in start: {e}")
-        await update.message.reply_text("❗️ خطا در شروع. لطفاً دوباره امتحان کنید.")
+        await update.message.reply_text(m("ERROR_SHEET"))
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
@@ -865,7 +868,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await safe_edit(q, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
         elif data.startswith("cat_"):
             cat = data[4:]
-            await safe_edit(q, m("CATEGORY").format(cat=EMOJI.get(cat, cat)), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
+            await safe_edit(q, m("CATEGORY", cat=EMOJI.get(cat, cat)), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
         elif data.startswith("show_"):
             pid = data[5:]
             prods = await get_products()
@@ -873,10 +876,9 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await safe_edit(q, m("STOCK_EMPTY"), reply_markup=await kb_main(ctx), parse_mode="HTML")
                 return
             p = prods[pid]
-            text = m("PRODUCT").format(
-                fa=p["fa"], it=p["it"], brand=p["brand"], desc=p["description"],
-                weight=p["weight"], price=p["price"], stock=p["stock"]
-            )
+            text = m("PRODUCT",
+                     fa=p["fa"], it=p["it"], brand=p["brand"], desc=p["description"],
+                     weight=p["weight"], price=p["price"], stock=p["stock"])
             if p["image_url"]:
                 await q.message.delete()
                 await ctx.bot.send_photo(
@@ -891,11 +893,18 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("add_"):
             pid = data[4:]
             success, msg = await add_cart(ctx, pid, update=update)
-            await safe_edit(q, msg, reply_markup=await kb_product(pid), parse_mode="HTML")
+            prods = await get_products()
+            p = prods.get(pid, {})
+            text = m("PRODUCT",
+                     fa=p.get("fa", "N/A"), it=p.get("it", "N/A"), brand=p.get("brand", "N/A"),
+                     desc=p.get("description", "N/A"), weight=p.get("weight", 0),
+                     price=p.get("price", 0), stock=p.get("stock", 0))
+            await safe_edit(q, f"{msg}\n\n{text}", reply_markup=await kb_product(pid), parse_mode="HTML")
         elif data.startswith("inc_"):
             pid = data[4:]
             success, msg = await add_cart(ctx, pid, update=update)
-            await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=await kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+            await safe_edit(q, f"{msg}\n\n{m('CART_GUIDE')}\n\n{fmt_cart(ctx.user_data.get('cart', []))}",
+                           reply_markup=await kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
         elif data.startswith("dec_"):
             pid = data[4:]
             cart = ctx.user_data.get("cart", [])
@@ -906,7 +915,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     cart.remove(item)
                 await asyncio.to_thread(
                     abandoned_cart_ws.append_row,
-                    [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), ctx.user_data.get("user_id", update.effective_user.id), json.dumps(cart)]
+                    [dt.now().strftime("%Y-%m-%d %H:%M:%S"), ctx.user_data.get("user_id", update.effective_user.id), json.dumps(cart)]
                 )
             await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(cart), reply_markup=await kb_cart(cart), parse_mode="HTML")
         elif data.startswith("del_"):
@@ -915,7 +924,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cart[:] = [i for i in cart if i["id"] != pid]
             await asyncio.to_thread(
                 abandoned_cart_ws.append_row,
-                [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), ctx.user_data.get("user_id", update.effective_user.id), json.dumps(cart)]
+                [dt.now().strftime("%Y-%m-%d %H:%M:%S"), ctx.user_data.get("user_id", update.effective_user.id), json.dumps(cart)]
             )
             await safe_edit(q, m("CART_GUIDE") + "\n\n" + fmt_cart(cart), reply_markup=await kb_cart(cart), parse_mode="HTML")
         elif data == "cart":
@@ -966,7 +975,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await cancel_order(update, ctx)
     except Exception as e:
         log.error(f"Error in callback_handler: {e}")
-        await q.message.reply_text("❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.")
+        await q.message.reply_text(m("ERROR_SHEET"))
 
 async def search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
@@ -982,15 +991,20 @@ async def search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(m("SEARCH_RESULTS"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
     except Exception as e:
         log.error(f"Error in search: {e}")
-        await update.message.reply_text("❗️ خطا در جستجو. لطفاً دوباره امتحان کنید.")
+        await update.message.reply_text(m("ERROR_SHEET"))
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         photo = update.message.photo[-1]
+        file = await photo.get_file()
+        file_size = (await file.get_file()).file_size
+        if file_size > 2 * 1024 * 1024:  # 2MB limit
+            await update.message.reply_text(m("ERROR_FILE_SIZE"))
+            return
         file_id = photo.file_id
         await asyncio.to_thread(
             uploads_ws.append_row,
-            [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            [dt.now().strftime("%Y-%m-%d %H:%M:%S"),
              update.effective_user.id,
              f"@{update.effective_user.username or '-'}",
              file_id]
@@ -1003,24 +1017,32 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(m("PHOTO_RECEIVED"), reply_markup=await kb_main(ctx), parse_mode="HTML")
     except Exception as e:
         log.error(f"Error in handle_photo: {e}")
-        await update.message.reply_text("❗️ خطا در دریافت تصویر. لطفاً دوباره امتحان کنید.")
+        await update.message.reply_text(m("ERROR_UPLOAD"))
 
 async def abandoned_cart_reminder(context: ContextTypes.DEFAULT_TYPE):
     try:
         records = await asyncio.to_thread(abandoned_cart_ws.get_all_records)
-        threshold = dt.datetime.utcnow() - dt.timedelta(hours=24)
+        required_cols = ["timestamp", "user_id", "cart"]
+        if records and not all(col in records[0] for col in required_cols):
+            log.error("Invalid columns in abandoned_carts")
+            return
+        threshold = dt.now() - timedelta(hours=24)
         for r in records:
-            ts = dt.datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S")
-            if ts < threshold:
-                user_id = int(r["user_id"])
-                cart = json.loads(r["cart"])
-                if cart:
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=m("ABANDONED_CART").format(cart=fmt_cart(cart)),
-                        reply_markup=await kb_main(context),
-                        parse_mode="HTML"
-                    )
+            try:
+                ts = dt.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S")
+                if ts < threshold:
+                    user_id = int(r["user_id"])
+                    cart = json.loads(r["cart"])
+                    if cart:
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=m("ABANDONED_CART", cart=fmt_cart(cart)),
+                            reply_markup=await kb_main(context),
+                            parse_mode="HTML"
+                        )
+            except (ValueError, json.JSONDecodeError) as e:
+                log.error(f"Invalid abandoned cart record: {r}, error: {e}")
+                continue
         await asyncio.to_thread(abandoned_cart_ws.clear)
         await asyncio.to_thread(abandoned_cart_ws.append_row, ["timestamp", "user_id", "cart"])
     except Exception as e:
@@ -1028,19 +1050,17 @@ async def abandoned_cart_reminder(context: ContextTypes.DEFAULT_TYPE):
 
 async def weekly_backup(context: ContextTypes.DEFAULT_TYPE):
     try:
-        backup_name = f"Bazarino_Backup_{dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        backup_name = f"Bazarino_Backup_{dt.now().strftime('%Y%m%d_%H%M%S')}"
         await asyncio.to_thread(gc.copy, SPREADSHEET, backup_name)
         log.info(f"Backup created: {backup_name}")
         if ADMIN_ID:
-            await context.bot.send_message(ADMIN_ID, f"📥 نسخه پشتیبان جدید ایجاد شد: {backup_name}")
+            await context.bot.send_message(ADMIN_ID, f"📥 نسخه پشتیبان جدید: {backup_name}")
     except Exception as e:
         log.error(f"Error in weekly_backup: {e}")
         if ADMIN_ID:
             await context.bot.send_message(ADMIN_ID, f"⚠️ خطا در ایجاد نسخه پشتیبان: {e}")
 
-# ───────────── Webhook
-app = FastAPI()
-
+# ───────────── Webhook Handler
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
@@ -1053,9 +1073,10 @@ async def webhook(request: Request):
         log.error(f"Webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ───────────── Main
-async def main():
-    global tg_app, bot
+# ───────────── Startup
+@app.on_event("startup")
+async def startup_event():
+    global tg_app, bot, scheduler
     try:
         tg_app = ApplicationBuilder().token(TOKEN).build()
         bot = tg_app.bot
@@ -1090,21 +1111,42 @@ async def main():
                     MessageHandler(filters.TEXT & ~filters.COMMAND, save_edited_field)
                 ]
             },
-            fallbacks=[CommandHandler("cancel", cancel_order)]
+            fallbacks=[CommandHandler("cancel", cancel_order)],
+            per_message=True
         )
 
         tg_app.add_handler(CommandHandler("start", start))
         tg_app.add_handler(CallbackQueryHandler(callback_handler))
         tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search))
         tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        tg_app.job_queue.run_repeating(abandoned_cart_reminder, interval=24*3600, first=10)
-        tg_app.job_queue.run_repeating(weekly_backup, interval=7*24*3600, first=60)
+        tg_app.add_handler(conv_handler)
 
-        log.info("Starting webhook server...")
-        await uvicorn.run(app, host="0.0.0.0", port=PORT)
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(abandoned_cart_reminder, IntervalTrigger(seconds=24*3600), args=[ContextTypes.DEFAULT_TYPE()])
+        scheduler.add_job(weekly_backup, IntervalTrigger(seconds=7*24*3600), args=[ContextTypes.DEFAULT_TYPE()])
+        scheduler.start()
+        log.info("APScheduler started")
+
+        await tg_app.initialize()
+        await tg_app.start()
+        log.info("Telegram app started")
     except Exception as e:
         log.error(f"Startup error: {e}")
-        raise SystemExit(f"❗️ خطا در راه‌اندازی بات: {e}")
+        raise SystemExit(f"❗️ خطا در راه‌اندازی: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    try:
+        if scheduler:
+            scheduler.shutdown()
+            log.info("APScheduler stopped")
+        if tg_app:
+            await tg_app.stop()
+            await tg_app.shutdown()
+            log.info("Telegram app stopped")
+    except Exception as e:
+        log.error(f"Shutdown error: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
