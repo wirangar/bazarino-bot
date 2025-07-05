@@ -301,8 +301,25 @@ try:
     except gspread.exceptions.WorksheetNotFound:
         log.warning(f"Uploads worksheet not found, creating new one: {SHEET_CONFIG['uploads']['name']}")
         uploads_ws = wb.add_worksheet(title=SHEET_CONFIG["uploads"]["name"], rows=1000, cols=4)
-    # Validate sheet structure
-    asyncio.create_task(validate_sheets())
+    # Validate sheet structure synchronously during startup
+    try:
+        sheets = {
+            "orders": (orders_ws, SHEET_CONFIG["orders"]["columns"]),
+            "products": (products_ws, SHEET_CONFIG["products"]["columns"]),
+            "discounts": (discounts_ws, SHEET_CONFIG["discounts"]["columns"]),
+            "abandoned_carts": (abandoned_cart_ws, SHEET_CONFIG["abandoned_carts"]["columns"]),
+            "uploads": (uploads_ws, SHEET_CONFIG["uploads"]["columns"])
+        }
+        for sheet_name, (ws, cols) in sheets.items():
+            headers = ws.row_values(1)  # Synchronous call
+            for col_name in cols.keys():
+                if col_name not in headers:
+                    log.error(f"Missing column '{col_name}' in sheet '{sheet_name}'")
+                    raise ValueError(f"❗️ ستون '{col_name}' در شیت '{sheet_name}' یافت نشد.")
+        log.info("All Google Sheets validated successfully")
+    except Exception as e:
+        log.error(f"Error validating Google Sheets: {e}")
+        raise SystemExit(f"❗️ خطا در اعتبارسنجی Google Sheets: {e}")
 except Exception as e:
     log.error(f"Failed to initialize Google Sheets: {e}")
     raise SystemExit(f"❗️ خطا در اتصال به Google Sheets: {e}")
@@ -1117,7 +1134,63 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ───────────── App, webhook and FastAPI
 app = FastAPI()
+# ───────────── App, webhook and FastAPI
+app = FastAPI()
 
+# Root endpoint to handle GET /
+@app.get("/")
+async def root():
+    return {"message": "Bazarino Telegram Bot is running. Use the Telegram bot to interact."}
+
+# Endpoint to check file existence
+@app.get("/check-files")
+async def check_files():
+    files = [
+        "config.yaml",
+        "messages.json",
+        "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json",
+        "fonts/Vazir.ttf",
+        "fonts/arial.ttf",
+        "fonts/Nastaliq.ttf",
+        "background_pattern.png",
+        "logo.png"
+    ]
+    result = {f: os.path.exists(f) for f in files}
+    return result
+
+# Endpoint to check Google Sheets connection
+@app.get("/check-sheets")
+async def check_sheets():
+    try:
+        wb = gc.open("Bazarnio Orders")
+        ws = wb.worksheet("Sheet2")
+        headers = ws.row_values(1)
+        return {"status": "success", "worksheet": ws.title, "headers": headers}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Webhook endpoint
+@app.post("/webhook/{secret}")
+async def webhook(secret: str, request: Request):
+    global tg_app
+    if secret != WEBHOOK_SECRET:
+        log.error(f"Invalid webhook secret: {secret}")
+        raise HTTPException(status_code=403, detail="Invalid secret")
+    if tg_app is None:
+        log.error("Webhook failed: tg_app is None, likely due to startup failure")
+        raise HTTPException(status_code=500, detail="Application not initialized")
+    try:
+        update = await request.json()
+        await tg_app.process_update(Update.de_json(update, bot))
+        return {"status": "ok"}
+    except Exception as e:
+        log.error(f"Webhook error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Rest of the code (lifespan, uvicorn.run, etc.)
+@asynccontextmanager
+async def lifespan(fastapi_app: FastAPI):
+    # ... (بقیه کد lifespan)
 # Root endpoint to handle GET /
 @app.get("/")
 async def root():
@@ -1171,6 +1244,16 @@ async def lifespan(fastapi_app: FastAPI):
     global tg_app, bot
     try:
         log.info("Starting up FastAPI application")
+        # Check files
+        files = ["config.yaml", "messages.json", "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json",
+                 "fonts/Vazir.ttf", "fonts/arial.ttf", "fonts/Nastaliq.ttf",
+                 "background_pattern.png", "logo.png"]
+        for f in files:
+            if not os.path.exists(f):
+                log.error(f"File not found: {f}")
+            else:
+                log.info(f"File found: {f}")
+        
         builder = ApplicationBuilder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
         tg_app = builder.build()
         bot = tg_app.bot
