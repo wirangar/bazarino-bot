@@ -1,31 +1,32 @@
 {
-  "WELCOME": "🍇 **به بازارینو خوش آمدید!** 🇮🇷🇮🇹\n\nBenvenuto in **Bazarino**!\n\n🛒 فروشگاه آنلاین محصولات اصیل ایرانی در قلب پروجا\nIl tuo mini-market persiano a Perugia.\n\n🚚 تحویل همان‌روز در پروجا | giornata a Perugia\n📦 ارسال به سراسر ایتالیا با هماهنگی | in tutta Italia\n\n👇 یکی از دسته‌ها را انتخاب کنید و طعم خانه را سفارش دهید:\nScegli una categoria e assapora la tua casa 👇",
+  "WELCOME": "🍇 **به بازارینو خوش آمدید!** 🇮🇷🇮🇹\n\nBenvenuto in **Bazarino**!\n\n🛒 فروشگاه آنلاین محصولات اصیل ایرانی در قلب پروجا\nIl tuo mini-market persiano a Perugia.\n\n🚚 تحویل همان‌روز در پروجا\n📦 ارسال به سراسر ایتالیا\n\n👇 یک دسته را انتخاب کنید:\nScegli una categoria 👇",
+  "CART_GUIDE": "📍 اگر در پروجا هستید، گزینه «پروجا» را انتخاب کنید.\n📦 برای سایر شهرهای ایتالیا، گزینه «ایتالیا» را بزنید.\n\nSe sei a Perugia, scegli «Perugia».\nPer altre città in Italia, scegli «Italia».",
   "CART_EMPTY": "🛒 سبد خرید شما خالی است.\nIl carrello è vuoto.",
   "ORDER_CANCELLED": "❌ سفارش لغو شد.\nOrdine annullato.",
-  "PHONE_INVALID": "📵 شماره تلفن نامعتبر است. لطفاً با فرمت درست وارد کنید (مثلاً +39...).\nNumero di telefono non valido.",
-  "ADDRESS_INVALID": "📍 آدرس خیلی کوتاه یا نامعتبر است. لطفاً کامل‌تر وارد کنید.\nIndirizzo troppo breve o non valido.",
-  "ERROR_SHEET": "❗️ خطا در ثبت سفارش. لطفاً مجدداً تلاش کنید یا با پشتیبانی تماس بگیرید.\nErrore durante il salvataggio. Riprova o contatta il supporto.",
-  "THANK_YOU": "✅ سفارش شما با موفقیت ثبت شد!\nGrazie per il tuo ordine!",
+  "PHONE_INVALID": "📵 شماره تلفن نامعتبر است.\nNumero di telefono non valido.",
+  "ADDRESS_INVALID": "📍 آدرس نامعتبر است.\nIndirizzo non valido.",
+  "ERROR_SHEET": "❗️ خطا در ثبت سفارش. لطفاً دوباره تلاش کنید.\nErrore durante il salvataggio.",
+  "THANK_YOU": "✅ سفارش شما ثبت شد!\nGrazie per il tuo ordine!",
   "CART_ADDED": "✅ به سبد خرید افزوده شد.\nAggiunto al carrello.",
-  "STOCK_EMPTY": "❌ این محصول در حال حاضر موجود نیست.\nProdotto esaurito al momento.",
-  "INPUT_NAME": "👤 لطفاً نام و نام خانوادگی خود را وارد کنید:\nInserisci il tuo nome e cognome:",
-  "INPUT_PHONE": "📞 لطفاً شماره تلفن خود را وارد کنید:\nInserisci il tuo numero di telefono:",
-  "INPUT_ADDRESS": "📍 لطفاً آدرس کامل تحویل را وارد کنید:\nInserisci l'indirizzo di consegna completo:",
-  "INPUT_POSTAL": "🏷 کدپستی را وارد کنید:\nInserisci il CAP:",
-  "INPUT_NOTES": "📝 اگر توضیح یا یادداشتی دارید بنویسید، در غیر این صورت /skip را بزنید.\nScrivi una nota se necessario, o premi /skip.",
-  "ORDER_CONFIRMED": "📦 سفارش شما با موفقیت ثبت شد و در حال آماده‌سازی است.\nOrdine confermato e in preparazione.",
-  "ABOUT_US": "👋 ما خانوادهٔ بازارینو هستیم؛ پل کوچکی میان طعم‌های خانگی ایران و دوستانمان در ایتالیا. هر محصول را با وسواس انتخاب می‌کنیم تا اصالت، کیفیت و حس نوستالژی را یک‌جا به شما برسانیم.\n👋 Siamo la famiglia di Bazarino: un piccolo ponte tra i sapori di casa persiani e i nostri amici in Italia. Selezioniamo ogni prodotto con cura per offrirti autenticità, qualità e un pizzico di nostalgia.",
-  "PRIVACY": "🔒 اطلاعات شخصی شما فقط برای پردازش سفارش و بهبود خدمات استفاده می‌شود؛ هیچ‌گاه بدون رضایت، با شخص ثالثی به اشتراک گذاشته نمی‌شود.\n🔒 I tuoi dati vengono utilizzati esclusivamente per elaborare l’ordine e migliorare il servizio; non saranno mai condivisi con terzi senza il tuo consenso.",
-  "BTN_SEARCH": "🔍 جستجو / Cerca",
-  "SEARCH_USAGE": "🔎 لطفاً نام محصول مورد نظر را وارد کنید:\nInserisci il nome del prodotto da cercare:",
-  "SEARCH_NONE": "❌ هیچ محصولی با این نام یافت نشد.\nNessun prodotto trovato con questo nome.",
-  "BTN_CART": "🛒 مشاهده سبد خرید / Carrello",
-  "BTN_BACK": "↩️ بازگشت / Indietro",
-  "BTN_ORDER_PERUGIA": "📍 تحویل در پروجا / Consegna a Perugia",
-  "BTN_ORDER_ITALY": "📦 ارسال به ایتالیا / Spedizione in Italia",
-  "BTN_CONTINUE": "✅ ادامه / Continua",
-  "SUPPORT_MESSAGE": "📞 با پشتیبانی تماس بگیرید یا تصویر ارسال کنید:\nContatta il supporto o invia un'immagine:",
-  "PHOTO_UPLOADED": "✅ تصویر با موفقیت ارسال شد.\nImmagine inviata con successo.",
-  "ERROR_FILE_SIZE": "❌ حجم تصویر بیش از حد مجاز است (حداکثر 2 مگابایت).\nImmagine troppo grande (max 2 MB).",
-  "ERROR_UPLOAD": "❗️ خطا در آپلود تصویر. لطفاً دوباره امتحان کنید.\nErrore durante il caricamento dell'immagine."
+  "STOCK_EMPTY": "❌ این محصول موجود نیست.\nProdotto esaurito.",
+  "INPUT_NAME": "👤 نام و نام خانوادگی:\nInserisci nome e cognome:",
+  "INPUT_PHONE": "📞 شماره تلفن:\nInserisci il numero di telefono:",
+  "INPUT_ADDRESS": "📍 آدرس کامل تحویل:\nInserisci l'indirizzo di consegna:",
+  "INPUT_POSTAL": "🏷 کدپستی:\nInserisci il CAP:",
+  "INPUT_NOTES": "📝 یادداشت (یا /skip):\nScrivi una nota o premi /skip.",
+  "ORDER_CONFIRMED": "📦 سفارش شما ثبت شد و در حال آماده‌سازی است.\nOrdine confermato e in preparazione.",
+  "ABOUT_US": "👋 بازارینو: طعم اصیل ایران در ایتالیا. محصولات باکیفیت با حس نوستالژی.\nBazarino: il sapore autentico dell'Iran in Italia.",
+  "PRIVACY": "🔒 اطلاعات شما فقط برای سفارش استفاده می‌شود.\nI tuoi dati sono usati solo per l'ordine.",
+  "BTN_SEARCH": "🔍 جستجو",
+  "SEARCH_USAGE": "🔎 نام محصول را وارد کنید:\nInserisci il nome del prodotto:",
+  "SEARCH_NONE": "❌ محصولی یافت نشد.\nNessun prodotto trovato.",
+  "BTN_CART": "🛒 سبد خرید",
+  "BTN_BACK": "↩️ بازگشت",
+  "BTN_ORDER_PERUGIA": "📍 پروجا",
+  "BTN_ORDER_ITALY": "📦 ایتالیا",
+  "BTN_CONTINUE": "✅ ادامه",
+  "SUPPORT_MESSAGE": "📞 تماس با پشتیبانی یا ارسال تصویر:\nContatta il supporto o invia un'immagine:",
+  "PHOTO_UPLOADED": "✅ تصویر ارسال شد.\nImmagine inviata.",
+  "ERROR_FILE_SIZE": "❌ تصویر بیش از 2 مگابایت است.\nImmagine troppo grande (max 2 MB).",
+  "ERROR_UPLOAD": "❗️ خطا در آپلود تصویر.\nErrore durante il caricamento."
 }
