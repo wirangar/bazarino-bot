@@ -277,31 +277,36 @@ try:
     gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(CREDS_JSON, scope))
     try:
         wb = gc.open(SPREADSHEET)
+        log.info(f"Successfully opened spreadsheet: {SPREADSHEET}")
     except gspread.exceptions.SpreadsheetNotFound:
         log.error(f"Spreadsheet '{SPREADSHEET}' not found. Please check the SPREADSHEET_NAME and access permissions.")
         raise SystemExit(f"❗️ فایل Google Spreadsheet با نام '{SPREADSHEET}' یافت نشد.")
     try:
         orders_ws = wb.worksheet(SHEET_CONFIG["orders"]["name"])
         products_ws = wb.worksheet(SHEET_CONFIG["products"]["name"])
+        log.info(f"Worksheets loaded: orders={SHEET_CONFIG['orders']['name']}, products={SHEET_CONFIG['products']['name']}")
     except gspread.exceptions.WorksheetNotFound as e:
         log.error(f"Worksheet not found: {e}. Check config.yaml for correct worksheet names.")
         raise SystemExit(f"❗️ خطا در دسترسی به worksheet: {e}")
     try:
         abandoned_cart_ws = wb.worksheet(SHEET_CONFIG["abandoned_carts"]["name"])
+        log.info(f"Worksheet loaded: abandoned_carts={SHEET_CONFIG['abandoned_carts']['name']}")
     except gspread.exceptions.WorksheetNotFound:
         log.warning(f"Abandoned carts worksheet not found, creating new one: {SHEET_CONFIG['abandoned_carts']['name']}")
         abandoned_cart_ws = wb.add_worksheet(title=SHEET_CONFIG["abandoned_carts"]["name"], rows=1000, cols=3)
     try:
         discounts_ws = wb.worksheet(SHEET_CONFIG["discounts"]["name"])
+        log.info(f"Worksheet loaded: discounts={SHEET_CONFIG['discounts']['name']}")
     except gspread.exceptions.WorksheetNotFound:
         log.warning(f"Discounts worksheet not found, creating new one: {SHEET_CONFIG['discounts']['name']}")
         discounts_ws = wb.add_worksheet(title=SHEET_CONFIG["discounts"]["name"], rows=1000, cols=4)
     try:
         uploads_ws = wb.worksheet(SHEET_CONFIG["uploads"]["name"])
+        log.info(f"Worksheet loaded: uploads={SHEET_CONFIG['uploads']['name']}")
     except gspread.exceptions.WorksheetNotFound:
         log.warning(f"Uploads worksheet not found, creating new one: {SHEET_CONFIG['uploads']['name']}")
         uploads_ws = wb.add_worksheet(title=SHEET_CONFIG["uploads"]["name"], rows=1000, cols=4)
-    # Validate sheet structure synchronously during startup
+    # Validate sheet structure synchronously
     try:
         sheets = {
             "orders": (orders_ws, SHEET_CONFIG["orders"]["columns"]),
@@ -311,11 +316,12 @@ try:
             "uploads": (uploads_ws, SHEET_CONFIG["uploads"]["columns"])
         }
         for sheet_name, (ws, cols) in sheets.items():
-            headers = ws.row_values(1)  # Synchronous call
+            headers = ws.row_values(1)  # Get headers synchronously
+            log.info(f"Headers for sheet '{sheet_name}' ({ws.title}): {headers}")
             for col_name in cols.keys():
                 if col_name not in headers:
-                    log.error(f"Missing column '{col_name}' in sheet '{sheet_name}'")
-                    raise ValueError(f"❗️ ستون '{col_name}' در شیت '{sheet_name}' یافت نشد.")
+                    log.error(f"Missing column '{col_name}' in sheet '{sheet_name}' ({ws.title})")
+                    raise ValueError(f"❗️ ستون '{col_name}' در شیت '{sheet_name}' ({ws.title}) یافت نشد.")
         log.info("All Google Sheets validated successfully")
     except Exception as e:
         log.error(f"Error validating Google Sheets: {e}")
