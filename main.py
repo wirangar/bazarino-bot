@@ -58,28 +58,28 @@ bot = None
 
 # ───────────── Generate Invoice
 async def generate_invoice(order_id, user_data, cart, total, discount):
- width, height = 800, 1200
- img = Image.new("RGB", (width, height), color=(255, 255, 255))
- draw = ImageDraw.Draw(img)
+    width, height = 800, 1200
+    img = Image.new("RGB", (width, height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
 
- header_color = (0, 100, 0)
- text_color = (0, 0, 0)
- border_color = (0, 0, 0)
- footer_color = (0, 80, 0)
+    header_color = (0, 100, 0)
+    text_color = (0, 0, 0)
+    border_color = (0, 0, 0)
+    footer_color = (0, 80, 0)
 
- try:
- title_font = ImageFont.truetype("fonts/Vazir.ttf", 30)
- body_font = ImageFont.truetype("fonts/Vazir.ttf", 24)
- small_font = ImageFont.truetype("fonts/Vazir.ttf", 20)
- latin_font = ImageFont.truetype("fonts/arial.ttf", 22)
- nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26)
- except Exception as e:
- log.warning(f"Font loading error: {e}. Using default fonts with adjusted size.")
- title_font = ImageFont.load_default().font_variant(size=30)
- body_font = ImageFont.load_default().font_variant(size=24)
- small_font = ImageFont.load_default().font_variant(size=20)
- latin_font = ImageFont.load_default().font_variant(size=22)
- nastaliq_font = ImageFont.load_default().font_variant(size=26)
+    try:
+        title_font = ImageFont.truetype("fonts/Vazir.ttf", 30)
+        body_font = ImageFont.truetype("fonts/Vazir.ttf", 24)
+        small_font = ImageFont.truetype("fonts/Vazir.ttf", 20)
+        latin_font = ImageFont.truetype("fonts/arial.ttf", 22)
+        nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26)
+    except Exception as e:
+        log.warning(f"Font loading error: {e}. Using default fonts with adjusted size.")
+        title_font = ImageFont.load_default().font_variant(size=30)
+        body_font = ImageFont.load_default().font_variant(size=24)
+        small_font = ImageFont.load_default().font_variant(size=20)
+        latin_font = ImageFont.load_default().font_variant(size=22)
+        nastaliq_font = ImageFont.load_default().font_variant(size=26)
 
  try:
  background = Image.open("background_pattern.png").resize((width, height))
