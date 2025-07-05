@@ -19,16 +19,4 @@
   "BTN_SEARCH": "🔍 جستجو / Cerca",
   "SEARCH_USAGE": "🔎 لطفاً نام محصول مورد نظر را وارد کنید:\nInserisci il nome del prodotto da cercare:",
   "SEARCH_NONE": "❌ هیچ محصولی با این نام یافت نشد.\nNessun prodotto trovato con questo nome.",
-  "BTN_CART": "🛒 مشاهده سبد خرید / Carrello",
-  "BTN_CONTINUE": "✔️ ادامه / Continua",
-  "BTN_BACK": "⬅️ بازگشت / Indietro",
-  "BTN_ORDER_PERUGIA": "📍 پروجا / Perugia",
-  "BTN_ORDER_ITALY": "🚚 ایتالیا / Italia",
-  "PROMO_AFTER_ORDER": "🎁 با استفاده از کد تخفیف BAZAR10 در سفارش بعدی، ۱۰٪ تخفیف بگیرید!\nRicevi il 10% di sconto sul tuo prossimo ordine con il codice BAZAR10!",
-  "SUPPORT_MESSAGE": "📞 با پشتیبانی تماس بگیرید: @BazarinoSupport\nContatta il supporto: @BazarinoSupport\n📷 برای ارسال رسید پرداخت یا درخواست خاص، دکمه زیر را بزنید:",
-  "UPLOAD_PHOTO": "📷 لطفاً تصویر خود را ارسال کنید (مثلاً رسید پرداخت یا درخواست خاص):\nInvia la tua immagine (es. ricevuta di pagamento o richiesta speciale):",
-  "PHOTO_UPLOADED": "✅ تصویر شما با موفقیت به پشتیبانی ارسال شد!\nL'immagine è stata inviata con successo al supporto!",
-  "ERROR_UPLOAD": "❌ خطا در ارسال تصویر. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.\nErrore durante l'invio dell'immagine. Riprova o contatta il supporto.",
-  "ERROR_FILE_SIZE": "❌ حجم تصویر بیش از حد مجاز (2 مگابایت) است.\nL'immagine supera il limite di 2 MB.",
-  "CART_GUIDE": "🛒 لطفاً مقصد سفارش خود را انتخاب کنید:\nاگر در پروجا هستید، گزینه «پروجا» را انتخاب کنید.\nاگر در شهرهای دیگر ایتالیا هستید، گزینه «ایتالیا» را انتخاب کنید و سپس «ادامه» را بزنید.\n\nScegli la destinazione del tuo ordine:\nSe sei a Perugia, seleziona «Perugia».\nSe sei in altre città italiane, seleziona «Italia» e poi premi «Continua»."
-}
+  "BTN_CART": "🛒 مشاهده سبد خرید / Carrello
