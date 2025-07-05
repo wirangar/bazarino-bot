@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: bazarino-bot
-    env: python
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python main.py"
-    pythonVersion: 3.12.3
