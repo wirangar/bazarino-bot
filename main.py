@@ -21,6 +21,7 @@ import yaml
 from typing import Dict, Any, List
 import io
 import random
+import textwrap
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -32,6 +33,9 @@ from telegram.ext import (
     ConversationHandler, MessageHandler, filters, JobQueue
 )
 from telegram.error import BadRequest, NetworkError
+from PIL import Image, ImageDraw, ImageFont
+import arabic_reshaper
+from bidi.algorithm import get_display
 
 # Logging setup
 logging.basicConfig(
@@ -48,10 +52,9 @@ log = logging.getLogger("bazarino")
 tg_app = None
 bot = None
 
-# ───────────── Lazy-import Pillow
+# ───────────── Generate Invoice
 async def generate_invoice(order_id, user_data, cart, total, discount):
-    from PIL import Image, ImageDraw, ImageFont
-    width, height = 600, 900
+    width, height = 1000, 1200
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
 
@@ -62,63 +65,74 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
     beige = (245, 245, 220)
 
     try:
-        title_font = ImageFont.truetype("fonts/Vazir.ttf", 24)
-        body_font = ImageFont.truetype("fonts/arial.ttf", 18)
-        small_font = ImageFont.truetype("fonts/Vazir.ttf", 16)
+        title_font = ImageFont.truetype("fonts/Vazir.ttf", 32)
+        body_font = ImageFont.truetype("fonts/Vazir.ttf", 26)
+        small_font = ImageFont.truetype("fonts/Vazir.ttf", 20)
+        latin_font = ImageFont.truetype("fonts/arial.ttf", 22)
     except Exception as e:
         log.error(f"Font loading error: {e}")
-        title_font = ImageFont.load_default(size=24)
-        body_font = ImageFont.load_default(size=18)
-        small_font = ImageFont.load_default(size=16)
+        title_font = ImageFont.load_default(size=32)
+        body_font = ImageFont.load_default(size=26)
+        small_font = ImageFont.load_default(size=20)
+        latin_font = ImageFont.load_default(size=22)
 
-    draw.rectangle([(0, 0), (width, 80)], fill=header_color)
-    draw.text((width // 2, 40), "فاکتور بازارینو / Fattura Bazarino", fill=(255, 255, 255), font=title_font, anchor="mm")
+    draw.rectangle([(0, 0), (width, 100)], fill=header_color)
+    header_text = get_display(arabic_reshaper.reshape("فاکتور بازارینو / Fattura Bazarino"))
+    draw.text((width // 2, 50), header_text, fill=(255, 255, 255), font=title_font, anchor="mm")
+
     try:
-        logo = Image.open("logo.png").resize((60, 60))
+        logo = Image.open("logo.png").resize((100, 100))
         img.paste(logo, (20, 10))
     except Exception as e:
         log.error(f"Logo loading error: {e}")
+        draw.text((30, 50), get_display(arabic_reshaper.reshape("🍇 بازارینو")), fill=text_color, font=body_font, anchor="lm")
 
-    y = 100
-    draw.text((50, y), f"شماره سفارش / Ordine #{order_id}", font=body_font, fill=text_color)
-    y += 30
-    draw.text((50, y), f"نام / Nome: {user_data['name']}", font=body_font, fill=text_color)
-    y += 30
-    draw.text((50, y), f"مقصد / Destinazione: {user_data['dest']}", font=body_font, fill=text_color)
-    y += 30
-    draw.text((50, y), f"آدرس / Indirizzo: {user_data['address']} | {user_data['postal']}", font=body_font, fill=text_color)
-    y += 40
+    y = 120
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"شماره سفارش / Ordine #{order_id}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"نام / Nome: {user_data['name']}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مقصد / Destinazione: {user_data['dest']}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"آدرس / Indirizzo: {user_data['address']} | {user_data['postal']}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
 
-    draw.text((50, y), "محصولات / Prodotti:", font=body_font, fill=text_color)
-    y += 30
-    draw.rectangle([(40, y - 10), (width - 40, y + 10 + len(cart) * 30)], outline=border_color, width=1)
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape("محصولات / Prodotti:")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.rectangle([(40, y - 10), (width - 40, y + 10 + len(cart) * 50)], outline=border_color, width=2)
     for item in cart:
-        draw.text((50, y), f"{item['qty']}× {item['fa']} — {item['qty'] * item['price']:.2f}€", font=body_font, fill=text_color)
-        y += 30
-    y += 20
-
-    draw.text((50, y), f"تخفیف / Sconto: {discount:.2f}€", font=body_font, fill=text_color)
+        item_text = get_display(arabic_reshaper.reshape(f"{item['qty']}× {item['fa']} — {item['qty'] * item['price']:.2f}€"))
+        draw.text((width - 50, y), item_text, font=body_font, fill=text_color, anchor="ra")
+        y += 50
     y += 30
-    draw.text((50, y), f"مجموع / Totale: {total:.2f}€", font=body_font, fill=text_color)
-    y += 30
-    draw.text((50, y), f"یادداشت / Nota: {user_data.get('notes', 'بدون یادداشت')}", font=body_font, fill=text_color)
-    y += 40
 
-    draw.rectangle([(40, y - 10), (width - 40, y + 80)], outline=border_color, width=1, fill=beige)
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"تخفیف / Sconto: {discount:.2f}€")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مجموع / Totale: {total:.2f}€")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"یادداشت / Nota: {user_data.get('notes', 'بدون یادداشت')}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+
+    draw.rectangle([(40, y - 10), (width - 40, y + 150)], outline=border_color, width=2, fill=beige)
     if not HAFEZ_QUOTES:
         log.error("No Hafez quotes defined in config.yaml")
         hafez = {"fa": "بدون نقل‌قول", "it": "Nessuna citazione"}
     else:
         hafez = random.choice(HAFEZ_QUOTES)
-    draw.text((50, y), "✨ فال حافظ / Fal di Hafez:", font=small_font, fill=text_color)
-    y += 20
-    draw.text((50, y), hafez["fa"], font=small_font, fill=text_color)
-    y += 20
-    draw.text((50, y), hafez["it"], font=small_font, fill=text_color)
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape("✨ فال حافظ / Fal di Hafez:")), font=small_font, fill=text_color, anchor="ra")
     y += 30
+    fa_lines = textwrap.wrap(hafez["fa"], width=50)
+    for line in fa_lines:
+        draw.text((width - 50, y), get_display(arabic_reshaper.reshape(line)), font=small_font, fill=text_color, anchor="ra")
+        y += 30
+    it_lines = textwrap.wrap(hafez["it"], width=50)
+    for line in it_lines:
+        draw.text((width - 50, y), line, font=latin_font, fill=text_color, anchor="ra")
+        y += 30
 
-    draw.rectangle([(0, height - 40), (width, height)], fill=header_color)
-    draw.text((width // 2, height - 20), "بازارینو - طعم ایران در ایتالیا", fill=(255, 255, 255), font=small_font, anchor="mm")
+    draw.rectangle([(0, height - 50), (width, height)], fill=header_color)
+    footer_text = get_display(arabic_reshaper.reshape("بازارینو - طعم ایران در ایتالیا"))
+    draw.text((width // 2, height - 25), footer_text, fill=(255, 255, 255), font=small_font, anchor="mm")
 
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")
@@ -321,9 +335,14 @@ async def safe_edit(q, *a, **k):
     try:
         await q.edit_message_text(*a, **k)
     except BadRequest as e:
-        if "not modified" in str(e):
-            return
-        log.error(f"Edit msg error: {e}")
+        if "not modified" in str(e) or "no text in the message to edit" in str(e):
+            try:
+                await q.message.delete()
+            except Exception as del_e:
+                log.error(f"Error deleting message: {del_e}")
+            await q.message.reply_text(*a, **k)
+        else:
+            log.error(f"Edit msg error: {e}")
     except NetworkError as e:
         log.error(f"Network error: {e}")
 
@@ -497,6 +516,16 @@ async def update_stock(cart):
 ASK_NAME, ASK_PHONE, ASK_ADDRESS, ASK_POSTAL, ASK_DISCOUNT, ASK_NOTES = range(6)
 
 # ───────────── Order Process
+async def skip_discount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        ctx.user_data["discount_code"] = None
+        await update.message.reply_text(m("INPUT_NOTES"))
+        return ASK_NOTES
+    except Exception as e:
+        log.error(f"Error in skip_discount: {e}")
+        await update.message.reply_text("❗️ خطا در پرش کد تخفیف. لطفاً دوباره امتحان کنید.")
+        return ConversationHandler.END
+
 async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         q = update.callback_query
@@ -854,7 +883,10 @@ async def lifespan(app: FastAPI):
                 ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_address)],
                 ASK_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_postal)],
                 ASK_POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_discount)],
-                ASK_DISCOUNT: [MessageHandler(filters.TEXT | filters.COMMAND, ask_notes)],
+                ASK_DISCOUNT: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, ask_notes),
+                    CommandHandler("skip", skip_discount)
+                ],
                 ASK_NOTES: [MessageHandler(filters.TEXT | filters.COMMAND, confirm_order)],
             },
             fallbacks=[CommandHandler("cancel", cancel_order)]
@@ -886,124 +918,6 @@ async def wh(req: Request, secret: str):
     except Exception as e:
         log.error(f"Webhook error: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        q = update.callback_query
-        d = q.data
-        await q.answer()
-
-        if d == "back":
-            await safe_edit(q, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
-            return
-
-        if d == "support":
-            await safe_edit(q, m("SUPPORT_MESSAGE"), reply_markup=kb_support(), parse_mode="HTML")
-            return
-
-        if d == "upload_photo":
-            ctx.user_data["awaiting_photo"] = True
-            await safe_edit(q, m("UPLOAD_PHOTO"), reply_markup=kb_support())
-            return
-
-        if d == "bestsellers":
-            bestsellers = [(pid, p) for pid, p in (await get_products()).items() if p.get("is_bestseller", False)]
-            if not bestsellers:
-                await safe_edit(q, "🔥 در حال حاضر محصول پرفروشی وجود ندارد.\nNessun prodotto più venduto al momento.", reply_markup=await kb_main(ctx), parse_mode="HTML")
-                return
-            rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")] for pid, p in bestsellers]
-            rows.append([InlineKeyboardButton(m("BTN_BACK"), callback_data="back")])
-            await safe_edit(q, "🔥 محصولات پرفروش / Più venduti", reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
-            return
-
-        if d == "search":
-            await safe_edit(q, m("SEARCH_USAGE"), reply_markup=await kb_main(ctx))
-            return
-
-        if d.startswith("cat_"):
-            cat = d[4:]
-            await safe_edit(q, EMOJI.get(cat, cat), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
-            return
-
-        if d.startswith("show_"):
-            pid = d[5:]
-            p = (await get_products())[pid]
-            cap = f"<b>{p['fa']} / {p['it']}</b>\n{p['desc']}\n{p['price']}€ / {p['weight']}\n||موجودی / Stock:|| {p['stock']}"
-            try:
-                await q.message.delete()
-            except Exception as e:
-                log.error(f"Error deleting previous message: {e}")
-            if p["image_url"] and p["image_url"].strip():
-                await ctx.bot.send_photo(
-                    chat_id=q.message.chat.id,
-                    photo=p["image_url"],
-                    caption=cap,
-                    reply_markup=kb_product(pid),
-                    parse_mode="HTML"
-                )
-            else:
-                await ctx.bot.send_message(
-                    chat_id=q.message.chat.id,
-                    text=cap,
-                    reply_markup=kb_product(pid),
-                    parse_mode="HTML"
-                )
-            return
-
-        if d.startswith("add_"):
-            pid = d[4:]
-            ok, msg = await add_cart(ctx, pid, qty=1, update=update)
-            await q.answer(msg, show_alert=not ok)
-            cat = (await get_products())[pid]["cat"]
-            await safe_edit(q, EMOJI.get(cat, cat), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
-            return
-
-        if d.startswith("back_cat_"):
-            cat = d.split("_")[2]
-            await safe_edit(q, EMOJI.get(cat, cat), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
-            return
-
-        if d == "cart":
-            cart = ctx.user_data.get("cart", [])
-            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(cart)}", reply_markup=kb_cart(cart), parse_mode="HTML")
-            return
-
-        if d.startswith(("inc_", "dec_", "del_")):
-            pid = d.split("_")[1]
-            cart = ctx.user_data.get("cart", [])
-            it = next((i for i in cart if i["id"] == pid), None)
-            if not it:
-                return
-            if d.startswith("inc_"):
-                await add_cart(ctx, pid, 1, update=update)
-            elif d.startswith("dec_"):
-                it["qty"] = max(1, it["qty"] - 1)
-            else:
-                cart.remove(it)
-            try:
-                await asyncio.to_thread(
-                    abandoned_cart_ws.append_row,
-                    [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                     ctx.user_data.get("user_id", update.effective_user.id),
-                     json.dumps(cart)]
-                )
-            except Exception as e:
-                log.error(f"Error saving abandoned cart: {e}")
-            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(cart)}", reply_markup=kb_cart(cart), parse_mode="HTML")
-            return
-
-        if d in ["order_perugia", "order_italy"]:
-            ctx.user_data["dest"] = "Perugia" if d == "order_perugia" else "Italy"
-            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(ctx.user_data.get('cart', []))}", reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
-            return
-
-        if d == "checkout":
-            return await start_order(update, ctx)
-    except Exception as e:
-        log.error(f"Error in router: {e}")
-        await q.message.reply_text("❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در router: {e}")
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=PORT)
