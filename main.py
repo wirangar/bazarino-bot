@@ -444,7 +444,7 @@ async def add_cart(ctx, pid, qty=1, update=None):
             cur["qty"] += qty
         else:
             cart.append(dict(id=pid, fa=p["fa"], price=p["price"], weight=p["weight"], qty=qty))
-        await alert_admin(pid, stock)
+        await alert_admin(pid, stock - qty)  # Update stock alert
         try:
             await asyncio.to_thread(
                 abandoned_cart_ws.append_row,
@@ -485,13 +485,14 @@ async def update_stock(cart):
             qty = it["qty"]
             for idx, row in enumerate(records, start=2):
                 if row["id"] == pid:
-                    new = row["stock"] - qty
+                    new = int(row["stock"]) - qty
                     if new < 0:
                         log.error(f"Cannot update stock for {pid}: negative stock")
                         return False
                     await asyncio.to_thread(products_ws.update_cell, idx, 10, new)
                     (await get_products())[pid]["stock"] = new
                     log.info(f"Updated stock for {pid}: {new}")
+                    await alert_admin(pid, new)
         return True
     except gspread.exceptions.APIError as e:
         log.error(f"Google Sheets API error during stock update: {e}")
@@ -534,7 +535,11 @@ async def ask_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def ask_address(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        ctx.user_data["phone"] = update.message.text.strip()
+        phone = update.message.text.strip()
+        if not phone.startswith("+39") or len(phone) < 10:
+            await update.message.reply_text(m("PHONE_INVALID"))
+            return ASK_PHONE
+        ctx.user_data["phone"] = phone
         await update.message.reply_text(m("INPUT_ADDRESS"))
         return ASK_ADDRESS
     except Exception as e:
@@ -544,7 +549,11 @@ async def ask_address(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def ask_postal(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        ctx.user_data["address"] = update.message.text.strip()
+        address = update.message.text.strip()
+        if len(address) < 10:
+            await update.message.reply_text(m("ADDRESS_INVALID"))
+            return ASK_ADDRESS
+        ctx.user_data["address"] = address
         await update.message.reply_text(m("INPUT_POSTAL"))
         return ASK_POSTAL
     except Exception as e:
@@ -816,6 +825,110 @@ async def cmd_privacy(u, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"Error in cmd_privacy: {e}")
         await u.message.reply_text("❗️ خطا در نمایش سیاست حریم خصوصی. لطفاً دوباره امتحان کنید.")
+
+# ───────────── Callback Query Router
+async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+
+        if data.startswith("cat_"):
+            cat = data[4:]
+            await safe_edit(query, f"دسته‌بندی: {EMOJI.get(cat, cat)}", reply_markup=await kb_category(cat, ctx))
+
+        elif data.startswith("show_"):
+            pid = data[5:]
+            prods = await get_products()
+            if pid not in prods:
+                await safe_edit(query, m("STOCK_EMPTY"), reply_markup=await kb_main(ctx))
+                return
+            p = prods[pid]
+            cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
+            if p["image_url"] and p["image_url"].strip():
+                await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=kb_product(pid))
+            else:
+                await safe_edit(query, cap, reply_markup=kb_product(pid))
+
+        elif data.startswith("add_"):
+            pid = data[4:]
+            success, msg = await add_cart(ctx, pid, update=update)
+            await safe_edit(query, msg, reply_markup=await kb_main(ctx))
+
+        elif data.startswith("inc_"):
+            pid = data[4:]
+            success, msg = await add_cart(ctx, pid, update=update)
+            cart = ctx.user_data.get("cart", [])
+            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
+
+        elif data.startswith("dec_"):
+            pid = data[4:]
+            cart = ctx.user_data.get("cart", [])
+            item = next((i for i in cart if i["id"] == pid), None)
+            if item and item["qty"] > 1:
+                item["qty"] -= 1
+            elif item:
+                cart.remove(item)
+            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
+
+        elif data.startswith("del_"):
+            pid = data[4:]
+            cart = ctx.user_data.get("cart", [])
+            cart[:] = [i for i in cart if i["id"] != pid]
+            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
+
+        elif data == "cart":
+            cart = ctx.user_data.get("cart", [])
+            await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
+
+        elif data == "order_perugia":
+            ctx.user_data["dest"] = "Perugia"
+            await safe_edit(query, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+
+        elif data == "order_italy":
+            ctx.user_data["dest"] = "Italia"
+            await safe_edit(query, m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+
+        elif data == "back":
+            await safe_edit(query, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
+
+        elif data.startswith("back_cat_"):
+            cat = data[9:]
+            await safe_edit(query, f"دسته‌بندی: {EMOJI.get(cat, cat)}", reply_markup=await kb_category(cat, ctx))
+
+        elif data == "bestsellers":
+            prods = await get_products()
+            bestsellers = [(pid, p) for pid, p in prods.items() if p["is_bestseller"]]
+            if not bestsellers:
+                await safe_edit(query, "❌ هیچ محصول پرفروشی یافت نشد.\nNessun prodotto bestseller trovato.", reply_markup=await kb_main(ctx))
+                return
+            for pid, p in bestsellers[:5]:
+                cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
+                btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}"))
+                if p["image_url"] and p["image_url"].strip():
+                    await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
+                else:
+                    await query.message.reply_text(cap, reply_markup=btn)
+            await safe_edit(query, "🔥 محصولات پرفروش / Prodotti più venduti", reply_markup=await kb_main(ctx))
+
+        elif data == "search":
+            await safe_edit(query, m("SEARCH_USAGE"))
+
+        elif data == "support":
+            await safe_edit(query, m("SUPPORT_MESSAGE"), reply_markup=kb_support())
+
+        elif data == "upload_photo":
+            ctx.user_data["awaiting_photo"] = True
+            await safe_edit(query, m("UPLOAD_PHOTO"))
+
+        else:
+            await safe_edit(query, "❗️ دستور ناشناخته. لطفاً دوباره تلاش کنید.\nComando sconosciuto. Riprova.", reply_markup=await kb_main(ctx))
+
+    except Exception as e:
+        log.error(f"Error in router: {e}")
+        await safe_edit(query, "❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.\nErrore nell'elaborazione della richiesta. Riprova.", reply_markup=await kb_main(ctx))
+        if ADMIN_ID and bot:
+            await bot.send_message(ADMIN_ID, f"⚠️ خطا در router: {e}")
 
 # ───────────── App, webhook and FastAPI
 async def post_init(app: Application):
