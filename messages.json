@@ -19,4 +19,13 @@
   "BTN_SEARCH": "🔍 جستجو / Cerca",
   "SEARCH_USAGE": "🔎 لطفاً نام محصول مورد نظر را وارد کنید:\nInserisci il nome del prodotto da cercare:",
   "SEARCH_NONE": "❌ هیچ محصولی با این نام یافت نشد.\nNessun prodotto trovato con questo nome.",
-  "BTN_CART": "🛒 مشاهده سبد خرید / Carrello
+  "BTN_CART": "🛒 مشاهده سبد خرید / Carrello",
+  "BTN_BACK": "↩️ بازگشت / Indietro",
+  "BTN_ORDER_PERUGIA": "📍 تحویل در پروجا / Consegna a Perugia",
+  "BTN_ORDER_ITALY": "📦 ارسال به ایتالیا / Spedizione in Italia",
+  "BTN_CONTINUE": "✅ ادامه / Continua",
+  "SUPPORT_MESSAGE": "📞 با پشتیبانی تماس بگیرید یا تصویر ارسال کنید:\nContatta il supporto o invia un'immagine:",
+  "PHOTO_UPLOADED": "✅ تصویر با موفقیت ارسال شد.\nImmagine inviata con successo.",
+  "ERROR_FILE_SIZE": "❌ حجم تصویر بیش از حد مجاز است (حداکثر 2 مگابایت).\nImmagine troppo grande (max 2 MB).",
+  "ERROR_UPLOAD": "❗️ خطا در آپلود تصویر. لطفاً دوباره امتحان کنید.\nErrore durante il caricamento dell'immagine."
+}
