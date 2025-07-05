@@ -7,7 +7,7 @@ Bazarino Telegram Bot – Optimized Version
 - Features: Invoice with Hafez quote, discount codes, order notes, abandoned cart reminders,
            photo upload (file_id), push notifications (preparing/shipped), weekly backup
 - Fixed menu navigation (single menu, back to category, add to cart returns to category)
-- Fixed stock issues, font errors, and order saving errors
+- Fixed stock issues, font errors, order saving errors, and FastAPI lifecycle issue
 - Enhanced logging for debugging
 """
 
@@ -23,6 +23,7 @@ import yaml
 from typing import Dict, Any, List
 import io
 import random
+from contextlib import asynccontextmanager
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -1063,9 +1064,11 @@ async def webhook(secret: str, request: Request):
         log.error(f"Webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
     global tg_app, bot
     try:
+        log.info("Starting up FastAPI application")
         builder = ApplicationBuilder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
         tg_app = builder.build()
         bot = tg_app.bot
@@ -1104,11 +1107,17 @@ async def lifespan(fastapi_app: FastAPI):
         tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
         yield
+    except Exception as e:
+        log.error(f"Lifespan startup error: {e}")
+        if ADMIN_ID and bot:
+            await bot.send_message(ADMIN_ID, f"⚠️ خطا در راه‌اندازی اپلیکیشن: {e}")
+        raise
     finally:
+        log.info("Shutting down FastAPI application")
         if tg_app:
             await tg_app.shutdown()
 
-app.lifecycle(lifespan)
+app.lifespan(lifespan)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=PORT)
