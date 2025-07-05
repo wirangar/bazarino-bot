@@ -347,8 +347,10 @@ async def kb_main(ctx):
         cart_summary = f"{m('BTN_CART')} ({cart_count(ctx)} آیتم - {cart_total(cart):.2f}€)" if cart else m("BTN_CART")
         rows.append([
             InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
-            InlineKeyboardButton(cart_summary, callback_data="cart"),
             InlineKeyboardButton("🔥 پرفروش‌ها / Più venduti", callback_data="bestsellers")
+        ])
+        rows.append([
+            InlineKeyboardButton(cart_summary, callback_data="cart")
         ])
         rows.append([
             InlineKeyboardButton("📞 پشتیبانی / Supporto", callback_data="support")
@@ -499,7 +501,7 @@ async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         q = update.callback_query
         if not ctx.user_data.get("dest"):
-            await q.message.reply_text("لطفاً مقصد (پروجا/ایتالیا) را انتخاب کنید.\nScegli la destinazione (Perugia/Italia).", reply_markup=kb_cart(ctx.user_data.get("cart", [])))
+            await q.message.reply_text(m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
             return
         ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
         ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
@@ -607,7 +609,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                      ctx.user_data.get("discount_code", ""), discount, "preparing", "FALSE"]
                 )
             log.info(f"Order {order_id} saved to Google Sheets for user {ctx.user_data['handle']}")
-            invoice_buffer = await generate_invoice(order_id, Vuser_data, cart, total, discount)
+            invoice_buffer = await generate_invoice(order_id, ctx.user_data, cart, total, discount)
             await update.message.reply_photo(
                 photo=invoice_buffer,
                 caption=f"{m('ORDER_CONFIRMED')}\n\n📍 مقصد / Destinazione: {ctx.user_data['dest']}\n💶 مجموع / Totale: {total:.2f}€\n🎁 تخفیف / Sconto: {discount:.2f}€\n📝 یادداشت / Nota: {ctx.user_data['notes'] or 'بدون یادداشت'}",
@@ -962,7 +964,8 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
 
         if d == "cart":
-            await safe_edit(q, fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+            cart = ctx.user_data.get("cart", [])
+            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(cart)}", reply_markup=kb_cart(cart), parse_mode="HTML")
             return
 
         if d.startswith(("inc_", "dec_", "del_")):
@@ -986,12 +989,12 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
             except Exception as e:
                 log.error(f"Error saving abandoned cart: {e}")
-            await safe_edit(q, fmt_cart(cart), reply_markup=kb_cart(cart), parse_mode="HTML")
+            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(cart)}", reply_markup=kb_cart(cart), parse_mode="HTML")
             return
 
         if d in ["order_perugia", "order_italy"]:
             ctx.user_data["dest"] = "Perugia" if d == "order_perugia" else "Italy"
-            await safe_edit(q, fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(ctx.user_data.get('cart', []))}", reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
             return
 
         if d == "checkout":
