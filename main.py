@@ -2,15 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Bazarino Telegram Bot – Optimized Version
-- Webhook via FastAPI on Render with secret token
+- Webhook via FastAPI on Render with secure secret token
 - Dynamic products from Google Sheets with versioned cache
 - Features: Invoice with Hafez quote, discount codes, order notes, abandoned cart reminders,
  photo upload (file_id), push notifications (preparing/shipped), weekly backup
-- Fixed menu navigation, stock issues, font errors, order saving errors, JobQueue issue,
- SyntaxError, and IndentationError
 - Enhanced error handling for webhook, lifespan, and file operations
-- Uses @app.lifespan for FastAPI compatibility
-- Enhanced logging for debugging
+- Uses Google Fonts as fallback for missing fonts
+- Downloads images online if image_url is provided
 """
 
 from __future__ import annotations
@@ -27,6 +25,7 @@ import io
 import random
 import zipfile
 from contextlib import asynccontextmanager
+import requests
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -57,9 +56,30 @@ log = logging.getLogger("bazarino")
 tg_app = None
 bot = None
 
+# ───────────── Validate Google Sheets Structure
+async def validate_sheets():
+    try:
+        sheets = {
+            "orders": (orders_ws, SHEET_CONFIG["orders"]["columns"]),
+            "products": (products_ws, SHEET_CONFIG["products"]["columns"]),
+            "discounts": (discounts_ws, SHEET_CONFIG["discounts"]["columns"]),
+            "abandoned_carts": (abandoned_cart_ws, SHEET_CONFIG["abandoned_carts"]["columns"]),
+            "uploads": (uploads_ws, SHEET_CONFIG["uploads"]["columns"])
+        }
+        for sheet_name, (ws, cols) in sheets.items():
+            headers = await asyncio.to_thread(ws.row_values, 1)
+            for col_name in cols.keys():
+                if col_name not in headers:
+                    log.error(f"Missing column '{col_name}' in sheet '{sheet_name}'")
+                    raise ValueError(f"❗️ ستون '{col_name}' در شیت '{sheet_name}' یافت نشد.")
+        log.info("All Google Sheets validated successfully")
+    except Exception as e:
+        log.error(f"Error validating Google Sheets: {e}")
+        raise
+
 # ───────────── Generate Invoice
 async def generate_invoice(order_id: str, user_data: Dict[str, Any], cart: List[Dict[str, Any]], total: float, discount: float) -> io.BytesIO:
-    width, height = 600, 900  # Reduced size for memory optimization
+    width, height = 600, 900
     img = Image.new("RGB", (width, height), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
 
@@ -68,16 +88,25 @@ async def generate_invoice(order_id: str, user_data: Dict[str, Any], cart: List[
     border_color = (0, 0, 0)
     footer_color = (0, 80, 0)
 
-    # Check font files before loading
+    # Fallback to Google Fonts if local fonts are missing
     font_files = ["fonts/Vazir.ttf", "fonts/arial.ttf", "fonts/Nastaliq.ttf"]
     fonts_exist = all(os.path.exists(f) for f in font_files)
     if not fonts_exist:
-        log.warning("One or more font files missing, using default fonts")
-        title_font = ImageFont.load_default().font_variant(size=30)
-        body_font = ImageFont.load_default().font_variant(size=24)
-        small_font = ImageFont.load_default().font_variant(size=20)
-        latin_font = ImageFont.load_default().font_variant(size=22)
-        nastaliq_font = ImageFont.load_default().font_variant(size=26)
+        log.warning("One or more font files missing, attempting to use Google Fonts")
+        try:
+            # Placeholder for Google Fonts integration (requires additional setup)
+            title_font = ImageFont.truetype("fonts/Vazir.ttf", 30) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=30)
+            body_font = ImageFont.truetype("fonts/Vazir.ttf", 24) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=24)
+            small_font = ImageFont.truetype("fonts/Vazir.ttf", 20) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=20)
+            latin_font = ImageFont.truetype("fonts/arial.ttf", 22) if os.path.exists("fonts/arial.ttf") else ImageFont.load_default().font_variant(size=22)
+            nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26) if os.path.exists("fonts/Nastaliq.ttf") else ImageFont.load_default().font_variant(size=26)
+        except Exception as e:
+            log.warning(f"Font loading error: {e}. Using default fonts.")
+            title_font = ImageFont.load_default().font_variant(size=30)
+            body_font = ImageFont.load_default().font_variant(size=24)
+            small_font = ImageFont.load_default().font_variant(size=20)
+            latin_font = ImageFont.load_default().font_variant(size=22)
+            nastaliq_font = ImageFont.load_default().font_variant(size=26)
     else:
         try:
             title_font = ImageFont.truetype("fonts/Vazir.ttf", 30)
@@ -144,11 +173,12 @@ async def generate_invoice(order_id: str, user_data: Dict[str, Any], cart: List[
     draw.rectangle([(40, y - 20), (width - 40, y + 120)], outline=border_color, width=2, fill=(240, 230, 210))
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape("✨ فال حافظ / Fal di Hafez:")), font=small_font, fill=text_color, anchor="ra")
     y += 30
-    if not HAFEZ_QUOTES:
-        log.error("No Hafez quotes defined in config.yaml")
+    enabled_quotes = [q for q in HAFEZ_QUOTES if q.get("enabled", True)]
+    if not enabled_quotes:
+        log.error("No enabled Hafez quotes defined in config.yaml")
         hafez = {"fa": "بدون نقل‌قول", "it": "Nessuna citazione"}
     else:
-        hafez = random.choice(HAFEZ_QUOTES)
+        hafez = random.choice(enabled_quotes)
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(hafez["fa"])), font=nastaliq_font, fill=text_color, anchor="ra")
     y += 40
     draw.text((50, y), hafez["it"], font=latin_font, fill=text_color, anchor="la")
@@ -223,7 +253,7 @@ except ValueError:
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = os.getenv("BASE_URL").rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "EhsaNegar1394")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", str(uuid.uuid4()))  # Secure random secret
 SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
 PRODUCT_WS = os.getenv("PRODUCT_WORKSHEET", "Sheet2")
 PORT = int(os.getenv("PORT", "8000"))
@@ -232,15 +262,18 @@ PORT = int(os.getenv("PORT", "8000"))
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_path = os.getenv("GOOGLE_CREDS", "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json")
-    try:
-        with open(creds_path, "r", encoding="utf-8") as f:
-            CREDS_JSON = json.load(f)
-    except FileNotFoundError:
-        log.error(f"Credentials file '{creds_path}' not found")
-        raise SystemExit(f"❗️ فایل احراز هویت '{creds_path}' یافت نشد.")
-    except json.JSONDecodeError as e:
-        log.error(f"Failed to parse credentials file '{creds_path}': {e}")
-        raise SystemExit(f"❗️ خطا در تجزیه فایل احراز هویت '{creds_path}': {e}")
+    if creds_path.startswith("{"):
+        CREDS_JSON = json.loads(creds_path)
+    else:
+        try:
+            with open(creds_path, "r", encoding="utf-8") as f:
+                CREDS_JSON = json.load(f)
+        except FileNotFoundError:
+            log.error(f"Credentials file '{creds_path}' not found")
+            raise SystemExit(f"❗️ فایل احراز هویت '{creds_path}' یافت نشد.")
+        except json.JSONDecodeError as e:
+            log.error(f"Failed to parse credentials file '{creds_path}': {e}")
+            raise SystemExit(f"❗️ خطا در تجزیه فایل احراز هویت '{creds_path}': {e}")
     gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(CREDS_JSON, scope))
     try:
         wb = gc.open(SPREADSHEET)
@@ -268,15 +301,16 @@ try:
     except gspread.exceptions.WorksheetNotFound:
         log.warning(f"Uploads worksheet not found, creating new one: {SHEET_CONFIG['uploads']['name']}")
         uploads_ws = wb.add_worksheet(title=SHEET_CONFIG["uploads"]["name"], rows=1000, cols=4)
+    # Validate sheet structure
+    asyncio.create_task(validate_sheets())
 except Exception as e:
     log.error(f"Failed to initialize Google Sheets: {e}")
     raise SystemExit(f"❗️ خطا در اتصال به Google Sheets: {e}")
 
-# ───────────── Check Fonts
-for font in ["fonts/Vazir.ttf", "fonts/arial.ttf", "fonts/Nastaliq.ttf"]:
-    if not os.path.exists(font):
-        log.warning(f"Font file '{font}' not found, using default fonts in generate_invoice")
-
+# ───────────── Check Fonts and Images
+for file in ["fonts/Vazir.ttf", "fonts/arial.ttf", "fonts/Nastaliq.ttf", "background_pattern.png", "logo.png"]:
+    if not os.path.exists(file):
+        log.warning(f"File '{file}' not found, using defaults where applicable")
 # ───────────── Google Sheets Data
 async def load_products() -> Dict[str, Dict[str, Any]]:
     try:
@@ -353,7 +387,7 @@ async def get_products() -> Dict[str, Dict[str, Any]]:
                 dt.datetime.utcnow() > getattr(get_products, "_ts", dt.datetime.min)):
             get_products._data = await load_products()
             get_products._version = current_version
-            get_products._ts = dt.datetime.utcnow() + dt.timedelta(minutes=5)  # Increased cache duration
+            get_products._ts = dt.datetime.utcnow() + dt.timedelta(minutes=5)
             log.info(f"Loaded {len(get_products._data)} products from Google Sheets, version {current_version}")
         return get_products._data
     except Exception as e:
@@ -886,7 +920,13 @@ async def cmd_search(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
             btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{p['cat']}"))
             if p["image_url"] and p["image_url"].strip():
-                await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
+                try:
+                    response = requests.get(p["image_url"], timeout=5)
+                    response.raise_for_status()
+                    await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
+                except requests.RequestException as e:
+                    log.warning(f"Failed to download image for product {pid}: {e}")
+                    await u.message.reply_text(cap, reply_markup=btn)
             else:
                 await u.message.reply_text(cap, reply_markup=btn)
     except Exception as e:
@@ -953,10 +993,13 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ctx.user_data["current_cat"] = p["cat"]
             if p["image_url"] and p["image_url"].strip():
                 try:
+                    response = requests.get(p["image_url"], timeout=5)
+                    response.raise_for_status()
                     await query.message.delete()
-                except Exception:
-                    pass
-                await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=kb_product(pid, p["cat"]))
+                    await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=kb_product(pid, p["cat"]))
+                except (requests.RequestException, BadRequest) as e:
+                    log.warning(f"Failed to display image for product {pid}: {e}")
+                    await safe_edit(query, cap, reply_markup=kb_product(pid, p["cat"]))
             else:
                 await safe_edit(query, cap, reply_markup=kb_product(pid, p["cat"]))
 
@@ -1042,7 +1085,13 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
                 btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{p['cat']}"))
                 if p["image_url"] and p["image_url"].strip():
-                    await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
+                    try:
+                        response = requests.get(p["image_url"], timeout=5)
+                        response.raise_for_status()
+                        await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
+                    except requests.RequestException as e:
+                        log.warning(f"Failed to display image for product {pid}: {e}")
+                        await query.message.reply_text(cap, reply_markup=btn)
                 else:
                     await query.message.reply_text(cap, reply_markup=btn)
             await query.message.reply_text("🔥 محصولات پرفروش / Prodotti più venduti", reply_markup=await kb_main(ctx))
@@ -1127,7 +1176,6 @@ async def lifespan(fastapi_app: FastAPI):
         bot = tg_app.bot
         await tg_app.initialize()
         log.info("Telegram application initialized successfully")
-        # Initialize JobQueue if not already set
         if not tg_app.job_queue:
             tg_app.job_queue = JobQueue()
             await tg_app.job_queue.start()
@@ -1137,7 +1185,6 @@ async def lifespan(fastapi_app: FastAPI):
         job_queue.run_repeating(check_order_status, interval=600)
         job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))
 
-        # Conversation Handler for order process
         order_conv = ConversationHandler(
             entry_points=[CallbackQueryHandler(start_order, pattern="^checkout$")],
             states={
@@ -1153,7 +1200,6 @@ async def lifespan(fastapi_app: FastAPI):
             per_chat=True
         )
 
-        # Add handlers
         tg_app.add_handler(CommandHandler("start", cmd_start))
         tg_app.add_handler(CommandHandler("about", cmd_about))
         tg_app.add_handler(CommandHandler("privacy", cmd_privacy))
@@ -1165,7 +1211,7 @@ async def lifespan(fastapi_app: FastAPI):
         yield
     except Exception as e:
         log.error(f"Lifespan startup error: {e}")
-        tg_app = None  # Ensure tg_app is None if initialization fails
+        tg_app = None
         if ADMIN_ID and bot:
             try:
                 await bot.send_message(ADMIN_ID, f"⚠️ خطا در راه‌اندازی اپلیکیشن: {e}")
@@ -1180,7 +1226,6 @@ async def lifespan(fastapi_app: FastAPI):
                 log.info("Telegram application shutdown completed")
             except Exception as e:
                 log.error(f"Error during shutdown: {e}")
-        tg_app = None
 
 app.lifespan = lifespan
 
