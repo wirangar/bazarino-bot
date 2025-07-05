@@ -5,5 +5,3 @@ gspread==5.12.0
 oauth2client==4.1.3
 pyyaml==6.0.1
 pillow==10.3.0
-arabic_reshaper==3.0.0
-python-bidi==0.4.2
