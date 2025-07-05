@@ -68,13 +68,19 @@ async def validate_sheets():
         }
         for sheet_name, (ws, cols) in sheets.items():
             headers = await asyncio.to_thread(ws.row_values, 1)
+            # Clean headers: remove extra spaces and convert to lowercase for comparison
+            cleaned_headers = [h.strip().lower() if h else "" for h in headers]
+            log.info(f"Headers for sheet '{sheet_name}' ({ws.title}): {headers}")
+            log.info(f"Cleaned headers for sheet '{sheet_name}' ({ws.title}): {cleaned_headers}")
             for col_name in cols.keys():
-                if col_name not in headers:
-                    log.error(f"Missing column '{col_name}' in sheet '{sheet_name}'")
-                    raise ValueError(f"❗️ ستون '{col_name}' در شیت '{sheet_name}' یافت نشد.")
+                if col_name.lower() not in cleaned_headers:
+                    log.error(f"Missing column '{col_name}' in sheet '{sheet_name}' ({ws.title})")
+                    raise ValueError(f"❗️ ستون '{col_name}' در شیت '{sheet_name}' ({ws.title}) یافت نشد.")
+                else:
+                    log.info(f"Column '{col_name}' found in sheet '{sheet_name}' ({ws.title})")
         log.info("All Google Sheets validated successfully")
     except Exception as e:
-        log.error(f"Error validating Google Sheets: {e}")
+        log.error(f"Error validating Google Sheets: {e}", exc_info=True)
         raise
 
 # ───────────── Generate Invoice
@@ -88,13 +94,12 @@ async def generate_invoice(order_id: str, user_data: Dict[str, Any], cart: List[
     border_color = (0, 0, 0)
     footer_color = (0, 80, 0)
 
-    # Fallback to Google Fonts if local fonts are missing
+    # Fallback to default fonts if local fonts are missing
     font_files = ["fonts/Vazir.ttf", "fonts/arial.ttf", "fonts/Nastaliq.ttf"]
     fonts_exist = all(os.path.exists(f) for f in font_files)
     if not fonts_exist:
-        log.warning("One or more font files missing, attempting to use Google Fonts")
+        log.warning("One or more font files missing, using default fonts")
         try:
-            # Placeholder for Google Fonts integration (requires additional setup)
             title_font = ImageFont.truetype("fonts/Vazir.ttf", 30) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=30)
             body_font = ImageFont.truetype("fonts/Vazir.ttf", 24) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=24)
             small_font = ImageFont.truetype("fonts/Vazir.ttf", 20) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=20)
@@ -306,34 +311,17 @@ try:
     except gspread.exceptions.WorksheetNotFound:
         log.warning(f"Uploads worksheet not found, creating new one: {SHEET_CONFIG['uploads']['name']}")
         uploads_ws = wb.add_worksheet(title=SHEET_CONFIG["uploads"]["name"], rows=1000, cols=4)
-    # Validate sheet structure synchronously
-    try:
-        sheets = {
-            "orders": (orders_ws, SHEET_CONFIG["orders"]["columns"]),
-            "products": (products_ws, SHEET_CONFIG["products"]["columns"]),
-            "discounts": (discounts_ws, SHEET_CONFIG["discounts"]["columns"]),
-            "abandoned_carts": (abandoned_cart_ws, SHEET_CONFIG["abandoned_carts"]["columns"]),
-            "uploads": (uploads_ws, SHEET_CONFIG["uploads"]["columns"])
-        }
-        for sheet_name, (ws, cols) in sheets.items():
-            headers = ws.row_values(1)  # Get headers synchronously
-            log.info(f"Headers for sheet '{sheet_name}' ({ws.title}): {headers}")
-            for col_name in cols.keys():
-                if col_name not in headers:
-                    log.error(f"Missing column '{col_name}' in sheet '{sheet_name}' ({ws.title})")
-                    raise ValueError(f"❗️ ستون '{col_name}' در شیت '{sheet_name}' ({ws.title}) یافت نشد.")
-        log.info("All Google Sheets validated successfully")
-    except Exception as e:
-        log.error(f"Error validating Google Sheets: {e}")
-        raise SystemExit(f"❗️ خطا در اعتبارسنجی Google Sheets: {e}")
+    # Validate sheet structure
+    await validate_sheets()  ### Modified: Use async validate_sheets with cleaned headers
 except Exception as e:
-    log.error(f"Failed to initialize Google Sheets: {e}")
+    log.error(f"Failed to initialize Google Sheets: {e}", exc_info=True)
     raise SystemExit(f"❗️ خطا در اتصال به Google Sheets: {e}")
 
 # ───────────── Check Fonts and Images
 for file in ["fonts/Vazir.ttf", "fonts/arial.ttf", "fonts/Nastaliq.ttf", "background_pattern.png", "logo.png"]:
     if not os.path.exists(file):
         log.warning(f"File '{file}' not found, using defaults where applicable")
+
 # ───────────── Google Sheets Data
 async def load_products() -> Dict[str, Dict[str, Any]]:
     try:
@@ -373,7 +361,7 @@ async def load_products() -> Dict[str, Dict[str, Any]]:
             raise SystemExit("❗️ هیچ محصول معتبری از Google Sheets بارگذاری نشد.")
         return products
     except Exception as e:
-        log.error(f"Error loading products from Google Sheets: {e}")
+        log.error(f"Error loading products from Google Sheets: {e}", exc_info=True)
         raise SystemExit(f"❗️ خطا در بارگذاری محصولات از Google Sheets: {e}")
 
 async def load_discounts() -> Dict[str, Dict[str, Any]]:
@@ -397,7 +385,7 @@ async def load_discounts() -> Dict[str, Dict[str, Any]]:
                 continue
         return discounts
     except Exception as e:
-        log.error(f"Error loading discounts: {e}")
+        log.error(f"Error loading discounts: {e}", exc_info=True)
         return {}
 
 async def get_products() -> Dict[str, Dict[str, Any]]:
@@ -414,7 +402,7 @@ async def get_products() -> Dict[str, Dict[str, Any]]:
             log.info(f"Loaded {len(get_products._data)} products from Google Sheets, version {current_version}")
         return get_products._data
     except Exception as e:
-        log.error(f"Error in get_products: {e}")
+        log.error(f"Error in get_products: {e}", exc_info=True)
         if hasattr(get_products, "_data"):
             log.warning("Returning cached products due to error")
             return get_products._data
@@ -443,10 +431,10 @@ async def safe_edit(q, *a, **k):
         if "not modified" in str(e) or "no text in the message to edit" in str(e):
             await q.message.reply_text(*a, **k)
         else:
-            log.error(f"Edit msg error: {e}")
+            log.error(f"Edit msg error: {e}", exc_info=True)
             await q.message.reply_text(*a, **k)
     except NetworkError as e:
-        log.error(f"Network error: {e}")
+        log.error(f"Network error: {e}", exc_info=True)
         await q.message.reply_text(*a, **k)
 
 async def alert_admin(pid: str, stock: int):
@@ -459,7 +447,7 @@ async def alert_admin(pid: str, stock: int):
                 log.info(f"Low stock alert sent for {product_name}")
                 break
             except Exception as e:
-                log.error(f"Alert fail attempt {attempt + 1} for product {pid}: {e}")
+                log.error(f"Alert fail attempt {attempt + 1} for product {pid}: {e}", exc_info=True)
                 if attempt < 2:
                     await asyncio.sleep(1)
 
@@ -482,7 +470,7 @@ async def kb_main(ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
         ])
         return InlineKeyboardMarkup(rows)
     except Exception as e:
-        log.error(f"Error in kb_main: {e}")
+        log.error(f"Error in kb_main: {e}", exc_info=True)
         raise
 
 async def kb_category(cat: str, ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
@@ -498,7 +486,7 @@ async def kb_category(cat: str, ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboar
         ])
         return InlineKeyboardMarkup(rows)
     except Exception as e:
-        log.error(f"Error in kb_category for category {cat}: {e}")
+        log.error(f"Error in kb_category for category {cat}: {e}", exc_info=True)
         raise
 
 def kb_product(pid: str, cat: str) -> InlineKeyboardMarkup:
@@ -512,7 +500,7 @@ def kb_product(pid: str, cat: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{cat}")]
         ])
     except Exception as e:
-        log.error(f"Error in kb_product for product {pid}: {e}")
+        log.error(f"Error in kb_product for product {pid}: {e}", exc_info=True)
         raise
 
 def kb_cart(ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
@@ -546,7 +534,7 @@ def kb_cart(ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
             ])
         return InlineKeyboardMarkup(rows)
     except Exception as e:
-        log.error(f"Error in kb_cart: {e}")
+        log.error(f"Error in kb_cart: {e}", exc_info=True)
         raise
 
 def kb_support() -> InlineKeyboardMarkup:
@@ -556,7 +544,7 @@ def kb_support() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")]
         ])
     except Exception as e:
-        log.error(f"Error in kb_support: {e}")
+        log.error(f"Error in kb_support: {e}", exc_info=True)
         raise
 
 # ───────────── Cart operations
@@ -598,10 +586,10 @@ async def add_cart(ctx: ContextTypes.DEFAULT_TYPE, pid: str, qty: int = 1, updat
             )
             log.info(f"Abandoned cart saved for user {ctx.user_data.get('user_id', 'unknown')}")
         except Exception as e:
-            log.error(f"Error saving abandoned cart: {e}")
+            log.error(f"Error saving abandoned cart: {e}", exc_info=True)
         return True, m("CART_ADDED")
     except Exception as e:
-        log.error(f"Error in add_cart for product {pid}: {e}")
+        log.error(f"Error in add_cart for product {pid}: {e}", exc_info=True)
         return False, "❗️ خطا در افزودن به سبد خرید."
 
 def fmt_cart(cart: List[Dict[str, Any]]) -> str:
@@ -618,7 +606,7 @@ def fmt_cart(cart: List[Dict[str, Any]]) -> str:
         lines.append(f"💶 **جمع / Totale:** {tot:.2f}€")
         return "\n".join(lines)
     except Exception as e:
-        log.error(f"Error in fmt_cart: {e}")
+        log.error(f"Error in fmt_cart: {e}", exc_info=True)
         return "❗️ خطا در نمایش سبد خرید."
 
 # ───────────── Stock update
@@ -633,7 +621,7 @@ async def update_stock(cart: List[Dict[str, Any]]) -> bool:
                     try:
                         new = int(row["stock"]) - qty
                     except (ValueError, TypeError) as e:
-                        log.error(f"Invalid stock value for {pid} in Google Sheets: {row.get('stock', 'N/A')}. Error: {e}")
+                        log.error(f"Invalid stock value for {pid} in Google Sheets: {row.get('stock', 'N/A')}. Error: {e}", exc_info=True)
                         return False
                     if new < 0:
                         log.error(f"Cannot update stock for {pid}: negative stock")
@@ -644,12 +632,12 @@ async def update_stock(cart: List[Dict[str, Any]]) -> bool:
                     await alert_admin(pid, new)
         return True
     except gspread.exceptions.APIError as e:
-        log.error(f"Google Sheets API error during stock update: {e}")
+        log.error(f"Google Sheets API error during stock update: {e}", exc_info=True)
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در به‌روزرسانی موجودی: {e}")
         return False
     except Exception as e:
-        log.error(f"Stock update error: {e}")
+        log.error(f"Stock update error: {e}", exc_info=True)
         return False
 
 # ───────────── Order States
@@ -668,7 +656,7 @@ async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await q.message.reply_text(m("INPUT_NAME"))
         return ASK_NAME
     except Exception as e:
-        log.error(f"Error in start_order: {e}")
+        log.error(f"Error in start_order: {e}", exc_info=True)
         await q.message.reply_text("❗️ خطا در شروع سفارش. لطفاً دوباره امتحان کنید.")
         return ConversationHandler.END
 
@@ -678,7 +666,7 @@ async def ask_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(m("INPUT_PHONE"))
         return ASK_PHONE
     except Exception as e:
-        log.error(f"Error in ask_phone: {e}")
+        log.error(f"Error in ask_phone: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در ثبت نام. لطفاً دوباره امتحان کنید.")
         return ConversationHandler.END
 
@@ -692,7 +680,7 @@ async def ask_address(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(m("INPUT_ADDRESS"))
         return ASK_ADDRESS
     except Exception as e:
-        log.error(f"Error in ask_address: {e}")
+        log.error(f"Error in ask_address: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در ثبت شماره تلفن. لطفاً دوباره امتحان کنید.")
         return ConversationHandler.END
 
@@ -706,7 +694,7 @@ async def ask_postal(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(m("INPUT_POSTAL"))
         return ASK_POSTAL
     except Exception as e:
-        log.error(f"Error in ask_postal: {e}")
+        log.error(f"Error in ask_postal: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در ثبت آدرس. لطفاً دوباره امتحان کنید.")
         return ConversationHandler.END
 
@@ -716,7 +704,7 @@ async def ask_discount(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("🎁 کد تخفیف دارید؟ وارد کنید یا /skip را بزنید.\nHai un codice sconto? Inseriscilo o premi /skip.")
         return ASK_DISCOUNT
     except Exception as e:
-        log.error(f"Error in ask_discount: {e}")
+        log.error(f"Error in ask_discount: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در ثبت کد پستی. لطفاً دوباره امتحان کنید.")
         return ConversationHandler.END
 
@@ -735,7 +723,7 @@ async def ask_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(m("INPUT_NOTES"))
         return ASK_NOTES
     except Exception as e:
-        log.error(f"Error in ask_notes: {e}")
+        log.error(f"Error in ask_notes: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در بررسی کد تخفیف. لطفاً دوباره امتحان کنید.")
         return ConversationHandler.END
 
@@ -783,7 +771,7 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                 reply_markup=ReplyKeyboardRemove()
             )
         except Exception as e:
-            log.error(f"Error saving order {order_id}: {e}")
+            log.error(f"Error saving order {order_id}: {e}", exc_info=True)
             await update.message.reply_text(m("ERROR_SHEET"), reply_markup=ReplyKeyboardRemove())
             ctx.user_data.clear()
             return ConversationHandler.END
@@ -800,15 +788,15 @@ async def confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
                 await bot.send_photo(ADMIN_ID, photo=invoice_buffer, caption="\n".join(msg))
                 log.info(f"Admin notified for order {order_id}")
             except Exception as e:
-                log.error(f"Failed to notify admin for order {order_id}: {e}")
+                log.error(f"Failed to notify admin for order {order_id}: {e}", exc_info=True)
             try:
                 await asyncio.to_thread(abandoned_cart_ws.clear)
             except Exception as e:
-                log.error(f"Error clearing abandoned carts: {e}")
+                log.error(f"Error clearing abandoned carts: {e}", exc_info=True)
         ctx.user_data.clear()
         return ConversationHandler.END
     except Exception as e:
-        log.error(f"Error in confirm_order: {e}")
+        log.error(f"Error in confirm_order: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در ثبت سفارش. لطفاً دوباره امتحان کنید.")
         ctx.user_data.clear()
         return ConversationHandler.END
@@ -819,7 +807,7 @@ async def cancel_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(m("ORDER_CANCELLED"), reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
     except Exception as e:
-        log.error(f"Error in cancel_order: {e}")
+        log.error(f"Error in cancel_order: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در لغو سفارش. لطفاً دوباره امتحان کنید.")
         return ConversationHandler.END
 
@@ -852,10 +840,10 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ctx.user_data["photo_note"] = ""
             await update.message.reply_text(m("SUPPORT_MESSAGE"), reply_markup=await kb_main(ctx))
         except Exception as e:
-            log.error(f"Error handling photo upload: {e}")
+            log.error(f"Error handling photo upload: {e}", exc_info=True)
             await update.message.reply_text(m("ERROR_UPLOAD"), reply_markup=await kb_main(ctx))
     except Exception as e:
-        log.error(f"Error in handle_photo: {e}")
+        log.error(f"Error in handle_photo: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در آپلود تصویر. لطفاً دوباره امتحان کنید.")
         ctx.user_data["awaiting_photo"] = False
 
@@ -883,7 +871,7 @@ async def check_order_status(context: ContextTypes.DEFAULT_TYPE):
             log.info(f"Sent {status} notification for order {order_id} to user {user_id}")
         check_order_status._last_checked_row = max(last_checked_row, max((c.row for c in shipped_cells + preparing_cells), default=1))
     except Exception as e:
-        log.error(f"Error checking order status: {e}")
+        log.error(f"Error checking order status: {e}", exc_info=True)
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در بررسی وضعیت سفارشات: {e}")
 
@@ -902,7 +890,7 @@ async def backup_sheets(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_document(ADMIN_ID, document=csv_file, caption=f"📊 بکاپ {sheet.title} - {dt.datetime.utcnow().strftime('%Y-%m-%d')}")
             log.info(f"Backup sent for {sheet.title}")
     except Exception as e:
-        log.error(f"Error creating backup: {e}")
+        log.error(f"Error creating backup: {e}", exc_info=True)
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در ایجاد بکاپ: {e}")
 
@@ -921,7 +909,7 @@ async def send_cart_reminder(context: ContextTypes.DEFAULT_TYPE):
                 )
         await asyncio.to_thread(abandoned_cart_ws.clear)
     except Exception as e:
-        log.error(f"Error sending cart reminders: {e}")
+        log.error(f"Error sending cart reminders: {e}", exc_info=True)
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در ارسال یادآور سبد خرید: {e}")
 
@@ -953,7 +941,7 @@ async def cmd_search(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 await u.message.reply_text(cap, reply_markup=btn)
     except Exception as e:
-        log.error(f"Error in cmd_search: {e}")
+        log.error(f"Error in cmd_search: {e}", exc_info=True)
         await u.message.reply_text("❗️ خطا در جستجو. لطفاً دوباره امتحان کنید.")
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در /search: {e}")
@@ -964,7 +952,7 @@ async def cmd_start(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data["user_id"] = u.effective_user.id
         await u.message.reply_html(m("WELCOME"), reply_markup=await kb_main(ctx))
     except Exception as e:
-        log.error(f"Error in cmd_start: {e}")
+        log.error(f"Error in cmd_start: {e}", exc_info=True)
         await u.message.reply_text("❗️ خطایی در بارگذاری منو رخ داد. لطفاً بعداً امتحان کنید یا با پشتیبانی تماس بگیرید.\nErrore nel caricamento del menu. Riprova più tardi o contatta il supporto.")
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در /start: {e}")
@@ -974,14 +962,14 @@ async def cmd_about(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         await u.message.reply_text(m("ABOUT_US"), disable_web_page_preview=True)
     except Exception as e:
-        log.error(f"Error in cmd_about: {e}")
+        log.error(f"Error in cmd_about: {e}", exc_info=True)
         await u.message.reply_text("❗️ خطا در نمایش اطلاعات. لطفاً دوباره امتحان کنید.")
 
 async def cmd_privacy(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         await u.message.reply_text(m("PRIVACY"), disable_web_page_preview=True)
     except Exception as e:
-        log.error(f"Error in cmd_privacy: {e}")
+        log.error(f"Error in cmd_privacy: {e}", exc_info=True)
         await u.message.reply_text("❗️ خطا در نمایش سیاست حریم خصوصی. لطفاً دوباره امتحان کنید.")
 
 # ───────────── Callback Query Router
@@ -1133,15 +1121,13 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await safe_edit(query, "❗️ دستور ناشناخته. لطفاً دوباره تلاش کنید.\nComando sconosciuto. Riprova.", reply_markup=await kb_main(ctx))
 
     except Exception as e:
-        log.error(f"Error in router: {e}")
+        log.error(f"Error in router: {e}", exc_info=True)
         await safe_edit(query, "❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.\nErrore nell'elaborazione della richiesta. Riprova.", reply_markup=await kb_main(ctx))
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در router: {e}")
 
 # ───────────── App, webhook and FastAPI
 app = FastAPI()
-# ───────────── App, webhook and FastAPI
-app = FastAPI()
 
 # Root endpoint to handle GET /
 @app.get("/")
@@ -1190,77 +1176,26 @@ async def webhook(secret: str, request: Request):
         await tg_app.process_update(Update.de_json(update, bot))
         return {"status": "ok"}
     except Exception as e:
-        log.error(f"Webhook error: {e}")
+        log.error(f"Webhook error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-# ───────────── App, webhook and FastAPI
-app = FastAPI()
-
-# Root endpoint to handle GET /
-@app.get("/")
-async def root():
-    return {"message": "Bazarino Telegram Bot is running. Use the Telegram bot to interact."}
-
-# Endpoint to check file existence
-@app.get("/check-files")
-async def check_files():
-    files = [
-        "config.yaml",
-        "messages.json",
-        "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json",
-        "fonts/Vazir.ttf",
-        "fonts/arial.ttf",
-        "fonts/Nastaliq.ttf",
-        "background_pattern.png",
-        "logo.png"
-    ]
-    result = {f: os.path.exists(f) for f in files}
-    return result
-
-# Endpoint to check Google Sheets connection
-@app.get("/check-sheets")
-async def check_sheets():
-    try:
-        wb = gc.open("Bazarnio Orders")
-        ws = wb.worksheet("Sheet2")
-        headers = ws.row_values(1)
-        return {"status": "success", "worksheet": ws.title, "headers": headers}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# Webhook endpoint
-@app.post("/webhook/{secret}")
-async def webhook(secret: str, request: Request):
-    global tg_app
-    if secret != WEBHOOK_SECRET:
-        log.error(f"Invalid webhook secret: {secret}")
-        raise HTTPException(status_code=403, detail="Invalid secret")
-    if tg_app is None:
-        log.error("Webhook failed: tg_app is None, likely due to startup failure")
-        raise HTTPException(status_code=500, detail="Application not initialized")
-    try:
-        update = await request.json()
-        await tg_app.process_update(Update.de_json(update, bot))
-        return {"status": "ok"}
-    except Exception as e:
-        log.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+# ───────────── Telegram Webhook Setup and Shutdown
 async def post_init(app: Application):
     try:
         webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
+        log.info(f"Attempting to set webhook to {webhook_url}")
         for attempt in range(3):
             try:
                 await app.bot.set_webhook(webhook_url)
-                log.info(f"Webhook set to {webhook_url}")
+                log.info(f"Webhook set successfully to {webhook_url}")
                 break
             except Exception as e:
-                log.error(f"Webhook attempt {attempt + 1} failed: {e}")
+                log.error(f"Webhook attempt {attempt + 1} failed: {e}", exc_info=True)
                 if attempt == 2:
                     raise
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)  ### Modified: Increased retry delay to 3 seconds
     except Exception as e:
-        log.error(f"Failed to set webhook: {e}")
+        log.error(f"Failed to set webhook: {e}", exc_info=True)
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در تنظیم Webhook: {e}")
         raise
@@ -1269,38 +1204,82 @@ async def post_shutdown(app: Application):
     log.info("Application shutting down")
     try:
         await app.bot.delete_webhook()
+        log.info("Webhook deleted successfully")
     except Exception as e:
-        log.error(f"Failed to delete webhook: {e}")
+        log.error(f"Failed to delete webhook: {e}", exc_info=True)
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
     global tg_app, bot
+    tg_app = None  # Initialize to None
     try:
         log.info("Starting up FastAPI application")
-        # Check files
-        files = ["config.yaml", "messages.json", "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json",
-                 "fonts/Vazir.ttf", "fonts/arial.ttf", "fonts/Nastaliq.ttf",
-                 "background_pattern.png", "logo.png"]
-        for f in files:
+
+        # Check critical files
+        critical_files = [
+            "config.yaml",
+            "messages.json",
+            "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json"
+        ]
+        optional_files = [
+            "fonts/Vazir.ttf",
+            "fonts/arial.ttf",
+            "fonts/Nastaliq.ttf",
+            "background_pattern.png",
+            "logo.png"
+        ]
+        for f in critical_files:
             if not os.path.exists(f):
-                log.error(f"File not found: {f}")
+                log.error(f"Critical file not found: {f}")
+                raise FileNotFoundError(f"❗️ فایل حیاتی '{f}' یافت نشد.")
             else:
-                log.info(f"File found: {f}")
-        
+                log.info(f"Critical file found: {f}")
+        for f in optional_files:
+            if not os.path.exists(f):
+                log.warning(f"Optional file not found: {f}, using defaults where applicable")
+            else:
+                log.info(f"Optional file found: {f}")
+
+        # Validate Telegram token
+        log.info("Validating Telegram token")
+        try:
+            response = requests.get(f"https://api.telegram.org/bot{TOKEN}/getMe", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            if not data.get("ok"):
+                log.error(f"Invalid Telegram token response: {data}")
+                raise ValueError(f"❗️ توکن تلگرام نامعتبر است: {data}")
+            log.info(f"Telegram token validated successfully: {data['result']['username']}")
+        except requests.RequestException as e:
+            log.error(f"Failed to validate Telegram token: {e}", exc_info=True)
+            raise SystemExit(f"❗️ خطا در اعتبارسنجی توکن تلگرام: {e}")
+
+        log.info("Building Telegram application")
         builder = ApplicationBuilder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
         tg_app = builder.build()
+        log.info("Telegram application built successfully")
+
         bot = tg_app.bot
+        log.info("Bot initialized successfully")
+
+        log.info("Initializing Telegram application")
         await tg_app.initialize()
         log.info("Telegram application initialized successfully")
+
         if not tg_app.job_queue:
+            log.info("Starting JobQueue")
             tg_app.job_queue = JobQueue()
             await tg_app.job_queue.start()
-            log.info("JobQueue started")
+            log.info("JobQueue started successfully")
+
         job_queue = tg_app.job_queue
+        log.info("Scheduling jobs")
         job_queue.run_daily(send_cart_reminder, time=dt.time(hour=18, minute=0))
         job_queue.run_repeating(check_order_status, interval=600)
         job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))
+        log.info("Jobs scheduled successfully")
 
+        log.info("Adding handlers to Telegram application")
         order_conv = ConversationHandler(
             entry_points=[CallbackQueryHandler(start_order, pattern="^checkout$")],
             states={
@@ -1323,16 +1302,17 @@ async def lifespan(fastapi_app: FastAPI):
         tg_app.add_handler(order_conv)
         tg_app.add_handler(CallbackQueryHandler(router))
         tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        log.info("Handlers added successfully")
 
         yield
     except Exception as e:
-        log.error(f"Lifespan startup error: {e}")
+        log.error(f"Lifespan startup error: {e}", exc_info=True)
         tg_app = None
         if ADMIN_ID and bot:
             try:
                 await bot.send_message(ADMIN_ID, f"⚠️ خطا در راه‌اندازی اپلیکیشن: {e}")
             except Exception as admin_e:
-                log.error(f"Failed to notify admin: {admin_e}")
+                log.error(f"Failed to notify admin: {admin_e}", exc_info=True)
         raise
     finally:
         log.info("Shutting down FastAPI application")
@@ -1341,7 +1321,7 @@ async def lifespan(fastapi_app: FastAPI):
                 await tg_app.shutdown()
                 log.info("Telegram application shutdown completed")
             except Exception as e:
-                log.error(f"Error during shutdown: {e}")
+                log.error(f"Error during shutdown: {e}", exc_info=True)
 
 app.lifespan = lifespan
 
