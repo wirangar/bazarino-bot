@@ -216,14 +216,23 @@ async def load_products() -> Dict[str, Dict[str, Any]]:
         products = {}
         for r in records:
             try:
+                # اعتبارسنجی id و cat
+                pid = str(r["id"]).strip()
+                cat = str(r["cat"]).strip()
+                if not pid or not cat:
+                    log.warning(f"Invalid product ID or category in row: {r}")
+                    continue
+                if "_" in pid or "_" in cat or " " in pid or " " in cat:
+                    log.warning(f"Invalid characters in product ID '{pid}' or category '{cat}' in row: {r}")
+                    continue
                 stock = r.get("stock", "0")
                 try:
                     stock = int(stock)
                 except (ValueError, TypeError) as e:
-                    log.warning(f"Invalid stock value for product {r.get('id', 'unknown')}: {stock}. Setting to 0. Error: {e}")
+                    log.warning(f"Invalid stock value for product {pid}: {stock}. Setting to 0. Error: {e}")
                     stock = 0
-                products[r["id"]] = dict(
-                    cat=r["cat"],
+                products[pid] = dict(
+                    cat=cat,
                     fa=r["fa"],
                     it=r.get("it", "N/A"),
                     brand=r["brand"],
@@ -697,6 +706,9 @@ def kb_product(pid: str, cat: str) -> InlineKeyboardMarkup:
         if not p:
             log.error(f"Product {pid} not found in cached products")
             raise KeyError(f"Product {pid} not found")
+        if not cat or "_" in cat or " " in cat:
+            log.error(f"Invalid category '{cat}' for product {pid}")
+            raise ValueError(f"Invalid category '{cat}'")
         return InlineKeyboardMarkup([
             [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{cat}")],
             [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{cat}")]
@@ -1009,7 +1021,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parts = data.split("_")
             if len(parts) != 3:
                 log.error(f"Invalid add_ callback data: {data}")
-                await safe_edit(query, "❗️ خطا در افزودن محصول.", reply_markup=await kb_main(ctx))
+                await safe_edit(query, "❗️ خطا در افزودن محصول. لطفاً دوباره امتحان کنید.", reply_markup=await kb_main(ctx))
                 return
             pid, cat = parts[1], parts[2]
             success, msg = await add_cart(ctx, pid, update=update)
@@ -1110,45 +1122,10 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.", reply_markup=await kb_main(ctx))
 
 # ───────────── FastAPI and Webhook
-app = FastAPI()
+from contextlib import asynccontextmanager
 
-async def post_init(app: Application):
-    try:
-        log.info("Setting webhook")
-        webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
-        await app.bot.set_webhook(webhook_url, secret_token=WEBHOOK_SECRET)
-        log.info(f"Webhook set to {webhook_url}")
-    except Exception as e:
-        log.error(f"Error setting webhook: {e}", exc_info=True)
-        raise
-
-async def post_shutdown(app: Application):
-    try:
-        log.info("Deleting webhook")
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        log.info("Webhook deleted successfully")
-    except Exception as e:
-        log.error(f"Error deleting webhook: {e}", exc_info=True)
-
-@app.post(f"/webhook/{WEBHOOK_SECRET}")
-async def webhook(request: Request):
-    global tg_app
-    try:
-        if not tg_app:
-            log.error("Telegram application not initialized")
-            raise HTTPException(status_code=503, detail="Application not initialized")
-        update = Update.de_json(await request.json(), bot)
-        if not update:
-            log.error("Invalid update received")
-            raise HTTPException(status_code=400, detail="Invalid update")
-        await tg_app.process_update(update)
-        return {"status": "ok"}
-    except Exception as e:
-        log.error(f"Webhook error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.on_event("startup")
-async def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global tg_app, bot
     try:
         log.info("Starting up FastAPI application")
@@ -1209,11 +1186,10 @@ async def on_startup():
         await tg_app.initialize()
         log.info("Telegram application initialized successfully")
 
-        if not tg_app.job_queue:
-            log.info("Starting JobQueue")
-            tg_app.job_queue = JobQueue()
-            await tg_app.job_queue.start()
-            log.info("JobQueue started successfully")
+        log.info("Starting JobQueue")
+        tg_app.job_queue = JobQueue()
+        await tg_app.job_queue.start()
+        log.info("JobQueue started successfully")
 
         job_queue = tg_app.job_queue
         log.info("Scheduling jobs")
@@ -1246,6 +1222,9 @@ async def on_startup():
         tg_app.add_handler(CallbackQueryHandler(router))
         tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         log.info("Handlers added successfully")
+
+        yield  # Control is passed to FastAPI application
+
     except Exception as e:
         log.error(f"Startup error: {e}", exc_info=True)
         tg_app = None
@@ -1256,16 +1235,51 @@ async def on_startup():
                 log.error(f"Failed to notify admin: {admin_e}", exc_info=True)
         raise SystemExit(f"❗️ خطا در راه‌اندازی اپلیکیشن: {e}")
 
-@app.on_event("shutdown")
-async def on_shutdown():
+    finally:
+        log.info("Shutting down FastAPI application")
+        if tg_app:
+            try:
+                await tg_app.shutdown()
+                log.info("Telegram application shutdown completed")
+            except Exception as e:
+                log.error(f"Error during shutdown: {e}", exc_info=True)
+
+async def post_init(app: Application):
+    try:
+        log.info("Setting webhook")
+        webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
+        await app.bot.set_webhook(webhook_url, secret_token=WEBHOOK_SECRET)
+        log.info(f"Webhook set to {webhook_url}")
+    except Exception as e:
+        log.error(f"Error setting webhook: {e}", exc_info=True)
+        raise
+
+async def post_shutdown(app: Application):
+    try:
+        log.info("Deleting webhook")
+        await app.bot.delete_webhook()
+        log.info("Webhook deleted successfully")
+    except Exception as e:
+        log.error(f"Error deleting webhook: {e}", exc_info=True)
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post(f"/webhook/{WEBHOOK_SECRET}")
+async def webhook(request: Request):
     global tg_app
-    log.info("Shutting down FastAPI application")
-    if tg_app:
-        try:
-            await tg_app.shutdown()
-            log.info("Telegram application shutdown completed")
-        except Exception as e:
-            log.error(f"Error during shutdown: {e}", exc_info=True)
+    try:
+        if not tg_app:
+            log.error("Telegram application not initialized")
+            raise HTTPException(status_code=503, detail="Application not initialized")
+        update = Update.de_json(await request.json(), bot)
+        if not update:
+            log.error("Invalid update received")
+            raise HTTPException(status_code=400, detail="Invalid update")
+        await tg_app.process_update(update)
+        return {"status": "ok"}
+    except Exception as e:
+        log.error(f"Webhook error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
