@@ -14,19 +14,26 @@
   "INPUT_ADDRESS": "📍 آدرس کامل تحویل:\nInserisci l'indirizzo di consegna:",
   "INPUT_POSTAL": "🏷 کدپستی:\nInserisci il CAP:",
   "INPUT_NOTES": "📝 یادداشت (یا /skip):\nScrivi una nota o premi /skip.",
-  "ORDER_CONFIRMED": "📦 سفارش شما ثبت شد و در حال آماده‌سازی است.\nOrdine confermato e in preparazione.",
+  "ORDER_CONFIRMED": "📦 سفارش #{order_id} ثبت شد و در حال آماده‌سازی است.\nOrdine #{order_id} confermato e in preparazione.",
   "ABOUT_US": "👋 بازارینو: طعم اصیل ایران در ایتالیا. محصولات باکیفیت با حس نوستالژی.\nBazarino: il sapore autentico dell'Iran in Italia.",
   "PRIVACY": "🔒 اطلاعات شما فقط برای سفارش استفاده می‌شود.\nI tuoi dati sono usati solo per l'ordine.",
   "BTN_SEARCH": "🔍 جستجو",
-  "SEARCH_USAGE": "🔎 نام محصول را وارد کنید:\nInserisci il nome del prodotto:",
-  "SEARCH_NONE": "❌ محصولی یافت نشد.\nNessun prodotto trovato.",
   "BTN_CART": "🛒 سبد خرید",
   "BTN_BACK": "↩️ بازگشت",
   "BTN_ORDER_PERUGIA": "📍 پروجا",
   "BTN_ORDER_ITALY": "📦 ایتالیا",
   "BTN_CONTINUE": "✅ ادامه",
-  "SUPPORT_MESSAGE": "📞 تماس با پشتیبانی یا ارسال تصویر:\nContatta il supporto o invia un'immagine:",
-  "PHOTO_UPLOADED": "✅ تصویر ارسال شد.\nImmagine inviata.",
+  "SUPPORT": "📞 تماس با پشتیبانی یا ارسال تصویر:\nContatta il supporto o invia un'immagine:",
+  "SEND_PHOTO": "📷 لطفاً تصویر خود را ارسال کنید.\nInvia una foto.",
+  "PHOTO_RECEIVED": "✅ تصویر ارسال شد.\nImmagine inviata.",
   "ERROR_FILE_SIZE": "❌ تصویر بیش از 2 مگابایت است.\nImmagine troppo grande (max 2 MB).",
-  "ERROR_UPLOAD": "❗️ خطا در آپلود تصویر.\nErrore durante il caricamento."
+  "ERROR_UPLOAD": "❗️ خطا در آپلود تصویر.\nErrore durante il caricamento.",
+  "SEARCH": "🔎 نام محصول را وارد کنید:\nInserisci il nome del prodotto:",
+  "NO_RESULTS": "❌ محصولی یافت نشد.\nNessun prodotto trovato.",
+  "SEARCH_RESULTS": "🔍 نتایج جستجو:\nRisultati della ricerca:",
+  "NO_BESTSELLERS": "🔥 هیچ محصول پرفروشی یافت نشد.\nNessun prodotto bestseller trovato.",
+  "BESTSELLERS": "🔥 محصولات پرفروش:\nProdotti bestseller:",
+  "CATEGORY": "🛒 دسته: {cat}\nCategoria: {cat}",
+  "PRODUCT": "📦 **{fa} / {it}**\n🏷 برند: {brand}\n📝 توضیحات: {desc}\n⚖️ وزن: {weight}g\n💶 قیمت: {price:.2f}€\n📈 موجودی: {stock}",
+  "ABANDONED_CART": "🛒 سبد خرید شما منتظر است!\nIl tuo carrello ti aspetta!\n\n{cart}"
 }
