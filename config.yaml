@@ -1,60 +1,14 @@
 sheets:
   orders:
     name: Sheet1
-    columns:
-      timestamp: 1
-      order_id: 2
-      user_id: 3
-      handle: 4
-      name: 5
-      phone: 6
-      address: 7
-      destination: 8
-      product_id: 9
-      product_name: 10
-      quantity: 11
-      price: 12
-      subtotal: 13
-      notes: 14
-      discount_code: 15
-      discount_amount: 16
-      status: 17
-      notified: 18
   products:
     name: Sheet2
-    columns:
-      id: 1
-      cat: 2
-      fa: 3
-      it: 4
-      brand: 5
-      description: 6
-      weight: 7
-      price: 8
-      image_url: 9
-      stock: 10
-      is_bestseller: 11
-      version: 12
   discounts:
     name: Sheet3
-    columns:
-      code: 1
-      discount_percent: 2
-      valid_until: 3
-      is_active: 4
   abandoned_carts:
     name: AbandonedCarts
-    columns:
-      timestamp: 1
-      user_id: 2
-      cart: 3
   uploads:
     name: UserUploads
-    columns:
-      timestamp: 1
-      user_id: 2
-      handle: 3
-      file_id: 4
 hafez_quotes:
   - fa: حافظا در کنج فقر و خلوت عزلت\nیارم آن شمع است و باقی همه پروانه
     it: Hafez, nel angolo della povertà e della solitudine,\nIl mio amato è la candela, e gli altri sono falene.
