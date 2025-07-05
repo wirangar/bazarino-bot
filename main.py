@@ -122,10 +122,11 @@ def m(k: str) -> str:
     return MSG.get(k, f"[{k}]")
 
 # ───────────── ENV
-for v in ("TELEGRAM_TOKEN", "ADMIN_CHAT тید", "BASE_URL"):
-    if not os.getenv(v):
-        log.error(f"Missing environment variable: {v}")
-        raise SystemExit(f"❗️ متغیر محیطی {v} تنظیم نشده است.")
+required_env_vars = ["TELEGRAM_TOKEN", "ADMIN_CHAT_ID", "BASE_URL"]
+missing_vars = [v for v in required_env_vars if not os.getenv(v)]
+if missing_vars:
+    log.error(f"Missing environment variables: {', '.join(missing_vars)}")
+    raise SystemExit(f"❗️ متغیرهای محیطی زیر تنظیم نشده‌اند: {', '.join(missing_vars)}")
 
 try:
     ADMIN_ID = int(os.getenv("ADMIN_CHAT_ID"))
@@ -445,7 +446,6 @@ async def generate_invoice(order_id: str, user_data: Dict[str, Any], cart: List[
     img.save(buffer, format="PNG", quality=95)
     buffer.seek(0)
     return buffer
-
 # ───────────── Order States
 ASK_NAME, ASK_PHONE, ASK_ADDRESS, ASK_POSTAL, ASK_DISCOUNT, ASK_NOTES = range(6)
 
@@ -1110,7 +1110,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.", reply_markup=await kb_main(ctx))
 
 # ───────────── FastAPI and Webhook
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 async def post_init(app: Application):
     try:
@@ -1147,10 +1147,9 @@ async def webhook(request: Request):
         log.error(f"Webhook error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@asynccontextmanager
-async def lifespan(fastapi_app: FastAPI):
+@app.on_event("startup")
+async def on_startup():
     global tg_app, bot
-    tg_app = None
     try:
         log.info("Starting up FastAPI application")
         log.info("Validating Google Sheets structure")
@@ -1247,48 +1246,26 @@ async def lifespan(fastapi_app: FastAPI):
         tg_app.add_handler(CallbackQueryHandler(router))
         tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         log.info("Handlers added successfully")
-
-        yield
     except Exception as e:
-        log.error(f"Lifespan startup error: {e}", exc_info=True)
+        log.error(f"Startup error: {e}", exc_info=True)
         tg_app = None
         if ADMIN_ID and bot:
             try:
                 await bot.send_message(ADMIN_ID, f"⚠️ خطا در راه‌اندازی اپلیکیشن: {e}")
             except Exception as admin_e:
                 log.error(f"Failed to notify admin: {admin_e}", exc_info=True)
-        raise
-    finally:
-        log.info("Shutting down FastAPI application")
-        if tg_app:
-            try:
-                await tg_app.shutdown()
-                log.info("Telegram application shutdown completed")
-            except Exception as e:
-                log.error(f"Error during shutdown: {e}", exc_info=True)
+        raise SystemExit(f"❗️ خطا در راه‌اندازی اپلیکیشن: {e}")
 
-@app.on_event("startup")
-async def on_startup():
-    global tg_app, bot
-    if tg_app is None:
+@app.on_event("shutdown")
+async def on_shutdown():
+    global tg_app
+    log.info("Shutting down FastAPI application")
+    if tg_app:
         try:
-            log.info("Running startup event to initialize Telegram application")
-            builder = ApplicationBuilder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
-            tg_app = builder.build()
-            bot = tg_app.bot
-            await tg_app.initialize()
-            if not tg_app.job_queue:
-                tg_app.job_queue = JobQueue()
-                await tg_app.job_queue.start()
-                job_queue = tg_app.job_queue
-                job_queue.run_daily(send_cart_reminder, time=dt.time(hour=18, minute=0))
-                job_queue.run_repeating(check_order_status, interval=600)
-                job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))
-            log.info("Telegram application initialized in startup event")
+            await tg_app.shutdown()
+            log.info("Telegram application shutdown completed")
         except Exception as e:
-            log.error(f"Error in startup event: {e}", exc_info=True)
-            tg_app = None
-            raise SystemExit(f"❗️ خطا در راه‌اندازی اپلیکیشن در startup: {e}")
+            log.error(f"Error during shutdown: {e}", exc_info=True)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
