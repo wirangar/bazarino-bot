@@ -1121,4 +1121,6 @@ async def lifespan(fastapi_app: FastAPI):
 
 app.lifespan = lifespan
 
-if __name__ == "__main 
+if __name__ == "__main__"
+
+
