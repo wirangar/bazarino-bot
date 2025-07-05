@@ -497,7 +497,7 @@ def fmt_cart(cart):
         return "❗️ خطا در نمایش سبد خرید."
 
 # ───────────── Stock update
-async to update_stock(cart):
+async def update_stock(cart):
     try:
         records = await asyncio.to_thread(products_ws.get_all_records)
         for it in cart:
@@ -881,7 +881,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             prods = await get_products()
             p = prods[pid]
             cap = f"{msg}\n\n{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
-            await safe_edit(query, cap, reply-markup=kb_product(pid))
+            await safe_edit(query, cap, reply_markup=kb_product(pid))
 
         elif data.startswith("inc_"):
             pid = data[4:]
