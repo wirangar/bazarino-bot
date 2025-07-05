@@ -65,11 +65,11 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
     beige = (245, 245, 220)
 
     try:
-        title_font_fa = ImageFont.truetype("fonts/Nastaliq.ttf", 36)  # نستعلیق برای عناوین فارسی
-        body_font_fa = ImageFont.truetype("fonts/Vazir.ttf", 28)      # Vazir برای متن‌های فارسی بدنه
-        hafez_font_fa = ImageFont.truetype("fonts/Nastaliq.ttf", 24)  # نستعلیق برای فال حافظ
-        body_font_it = ImageFont.truetype("fonts/Roboto.ttf", 26)     # Roboto برای متن ایتالیایی
-        small_font_it = ImageFont.truetype("fonts/Roboto.ttf", 22)    # Roboto برای متن کوچک ایتالیایی
+        title_font_fa = ImageFont.truetype("fonts/Nastaliq.ttf", 36)
+        body_font_fa = ImageFont.truetype("fonts/Vazir.ttf", 28)
+        hafez_font_fa = ImageFont.truetype("fonts/Nastaliq.ttf", 24)
+        body_font_it = ImageFont.truetype("fonts/Roboto.ttf", 26)
+        small_font_it = ImageFont.truetype("fonts/Roboto.ttf", 22)
     except Exception as e:
         log.error(f"Font loading error: {e}")
         title_font_fa = ImageFont.load_default(size=36)
@@ -379,13 +379,13 @@ async def kb_main(ctx):
         cart_summary = f"{m('BTN_CART')} ({cart_count(ctx)} آیتم - {cart_total(cart):.2f}€)" if cart else m("BTN_CART")
         rows.append([
             InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
-            InlineKeyboardButton("🔥 پرفروش‌ها / Più venduti", callback_data="bestsellers")
+            InlineKeyboardButton("🔥 پرفروش‌ها", callback_data="bestsellers")
         ])
         rows.append([
             InlineKeyboardButton(cart_summary, callback_data="cart")
         ])
         rows.append([
-            InlineKeyboardButton("📞 پشتیبانی / Supporto", callback_data="support")
+            InlineKeyboardButton("📞 پشتیبانی", callback_data="support")
         ])
         return InlineKeyboardMarkup(rows)
     except Exception as e:
@@ -428,8 +428,8 @@ def kb_cart(cart):
                 InlineKeyboardButton("❌", callback_data=f"del_{pid}")
             ])
         rows.append([
-            InlineKeyboardButton(m("BTN_ORDER_PERUGIA"), callback_data="order_perugia"),
-            InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
+            InlineKeyboardButton("📍 پروجا", callback_data="order_perugia"),
+            InlineKeyboardButton("📦 ایتالیا", callback_data="order_italy")
         ])
         rows.append([
             InlineKeyboardButton(m("BTN_CONTINUE"), callback_data="checkout"),
@@ -443,7 +443,7 @@ def kb_cart(cart):
 def kb_support():
     try:
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📷 ارسال تصویر / Invia immagine", callback_data="upload_photo")],
+            [InlineKeyboardButton("📷 ارسال تصویر", callback_data="upload_photo")],
             [InlineKeyboardButton(m("BTN_BACK"), callback_data="back")]
         ])
     except Exception as e:
@@ -466,7 +466,7 @@ async def add_cart(ctx, pid, qty=1, update=None):
         if cur:
             cur["qty"] += qty
         else:
-            cart.append(dict(id=pid, fa=p["fa"], price=p["price"], weight=p["weight"], qty=qty))
+            cart.append(dict(id=pid, fa=p["fa"], it=p["it"], price=p["price"], weight=p["weight"], qty=qty))
         await alert_admin(pid, stock)
         try:
             await asyncio.to_thread(
@@ -508,7 +508,7 @@ async def update_stock(cart):
             qty = it["qty"]
             for idx, row in enumerate(records, start=2):
                 if row["id"] == pid:
-                    new = row["stock"] - qty
+                    new = int(row["stock"]) - qty
                     if new < 0:
                         log.error(f"Cannot update stock for {pid}: negative stock")
                         return False
@@ -548,7 +548,15 @@ async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
         ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
         ctx.user_data["user_id"] = update.effective_user.id
-        await q.message.reply_text(m("INPUT_NAME"))
+        try:
+            await q.message.delete()
+        except Exception as e:
+            log.error(f"Error deleting previous message in start_order: {e}")
+        await ctx.bot.send_message(
+            chat_id=q.message.chat.id,
+            text=m("INPUT_NAME"),
+            reply_markup=ReplyKeyboardRemove()
+        )
         return ASK_NAME
     except Exception as e:
         log.error(f"Error in start_order: {e}")
@@ -704,7 +712,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not ctx.user_data.get("awaiting_photo"):
             return
         photo = update.message.photo[-1]
-        if photo.file_size > 2 * 1024 * 1024:  # حداکثر 2 مگابایت
+        if photo.file_size > 2 * 1024 * 1024:
             await update.message.reply_text(m("ERROR_FILE_SIZE"), reply_markup=await kb_main(ctx))
             ctx.user_data["awaiting_photo"] = False
             return
@@ -744,11 +752,11 @@ async def check_order_status(context: ContextTypes.DEFAULT_TYPE):
             if cell.row <= last_checked_row:
                 continue
             row_data = await asyncio.to_thread(orders_ws.row_values, cell.row)
-            if len(row_data) < 18 or row_data[17] == "TRUE":  # notified
+            if len(row_data) < 18 or row_data[17] == "TRUE":
                 continue
-            user_id = int(row_data[2])  # user_id
-            order_id = row_data[1]  # order_id
-            status = row_data[16]  # status
+            user_id = int(row_data[2])
+            order_id = row_data[1]
+            status = row_data[16]
             msg = {
                 "preparing": f"📦 سفارش شما (#{order_id}) در حال آماده‌سازی است!\nIl tuo ordine (#{order_id}) è in preparazione!",
                 "shipped": f"🚚 سفارش شما (#{order_id}) ارسال شد!\nIl tuo ordine (#{order_id}) è stato spedito!"
