@@ -68,12 +68,11 @@ async def validate_sheets():
         }
         for sheet_name, (ws, cols) in sheets.items():
             headers = await asyncio.to_thread(ws.row_values, 1)
-            # Clean headers: remove extra spaces and convert to lowercase for comparison
             cleaned_headers = [h.strip().lower() if h else "" for h in headers]
             log.info(f"Headers for sheet '{sheet_name}' ({ws.title}): {headers}")
             log.info(f"Cleaned headers for sheet '{sheet_name}' ({ws.title}): {cleaned_headers}")
             for col_name in cols.keys():
-                if col_name.lower() not in cleaned_headers:
+                if col_name.strip().lower() not in cleaned_headers:
                     log.error(f"Missing column '{col_name}' in sheet '{sheet_name}' ({ws.title})")
                     raise ValueError(f"❗️ ستون '{col_name}' در شیت '{sheet_name}' ({ws.title}) یافت نشد.")
                 else:
@@ -82,122 +81,6 @@ async def validate_sheets():
     except Exception as e:
         log.error(f"Error validating Google Sheets: {e}", exc_info=True)
         raise
-
-# ───────────── Generate Invoice
-async def generate_invoice(order_id: str, user_data: Dict[str, Any], cart: List[Dict[str, Any]], total: float, discount: float) -> io.BytesIO:
-    width, height = 600, 900
-    img = Image.new("RGB", (width, height), color=(255, 255, 255))
-    draw = ImageDraw.Draw(img)
-
-    header_color = (0, 100, 0)
-    text_color = (0, 0, 0)
-    border_color = (0, 0, 0)
-    footer_color = (0, 80, 0)
-
-    # Fallback to default fonts if local fonts are missing
-    font_files = ["fonts/Vazir.ttf", "fonts/arial.ttf", "fonts/Nastaliq.ttf"]
-    fonts_exist = all(os.path.exists(f) for f in font_files)
-    if not fonts_exist:
-        log.warning("One or more font files missing, using default fonts")
-        try:
-            title_font = ImageFont.truetype("fonts/Vazir.ttf", 30) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=30)
-            body_font = ImageFont.truetype("fonts/Vazir.ttf", 24) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=24)
-            small_font = ImageFont.truetype("fonts/Vazir.ttf", 20) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=20)
-            latin_font = ImageFont.truetype("fonts/arial.ttf", 22) if os.path.exists("fonts/arial.ttf") else ImageFont.load_default().font_variant(size=22)
-            nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26) if os.path.exists("fonts/Nastaliq.ttf") else ImageFont.load_default().font_variant(size=26)
-        except Exception as e:
-            log.warning(f"Font loading error: {e}. Using default fonts.")
-            title_font = ImageFont.load_default().font_variant(size=30)
-            body_font = ImageFont.load_default().font_variant(size=24)
-            small_font = ImageFont.load_default().font_variant(size=20)
-            latin_font = ImageFont.load_default().font_variant(size=22)
-            nastaliq_font = ImageFont.load_default().font_variant(size=26)
-    else:
-        try:
-            title_font = ImageFont.truetype("fonts/Vazir.ttf", 30)
-            body_font = ImageFont.truetype("fonts/Vazir.ttf", 24)
-            small_font = ImageFont.truetype("fonts/Vazir.ttf", 20)
-            latin_font = ImageFont.truetype("fonts/arial.ttf", 22)
-            nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26)
-        except Exception as e:
-            log.warning(f"Font loading error: {e}. Using default fonts.")
-            title_font = ImageFont.load_default().font_variant(size=30)
-            body_font = ImageFont.load_default().font_variant(size=24)
-            small_font = ImageFont.load_default().font_variant(size=20)
-            latin_font = ImageFont.load_default().font_variant(size=22)
-            nastaliq_font = ImageFont.load_default().font_variant(size=26)
-
-    # Load background image
-    if os.path.exists("background_pattern.png"):
-        try:
-            background = Image.open("background_pattern.png").resize((width, height))
-            img.paste(background, (0, 0), background.convert("RGBA"))
-        except Exception as e:
-            log.warning(f"Background pattern loading error: {e}")
-    else:
-        log.warning("Background pattern file not found, using plain background")
-
-    draw.rectangle([(0, 0), (width, 100)], fill=header_color)
-    header_text = get_display(arabic_reshaper.reshape("فاکتور بازارینو / Fattura Bazarino"))
-    draw.text((width // 2, 50), header_text, fill=(255, 255, 255), font=title_font, anchor="mm")
-
-    if os.path.exists("logo.png"):
-        try:
-            logo = Image.open("logo.png").resize((100, 100), Image.Resampling.LANCZOS)
-            img.paste(logo, (20, 10), logo.convert("RGBA"))
-        except Exception as e:
-            log.warning(f"Logo loading error: {e}")
-
-    y = 120
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"شماره سفارش / Ordine #{order_id}")), font=body_font, fill=text_color, anchor="ra")
-    y += 50
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"نام / Nome: {user_data['name']}")), font=body_font, fill=text_color, anchor="ra")
-    y += 50
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مقصد / Destinazione: {user_data['dest']}")), font=body_font, fill=text_color, anchor="ra")
-    y += 50
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"آدرس / Indirizzo: {user_data['address']} | {user_data['postal']}")), font=body_font, fill=text_color, anchor="ra")
-    y += 50
-
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape("محصولات / Prodotti:")), font=body_font, fill=text_color, anchor="ra")
-    y += 50
-    draw.rectangle([(40, y - 10), (width - 40, y + 10 + len(cart) * 50)], outline=border_color, width=2, fill=(255, 250, 240))
-    for item in cart:
-        item_text = get_display(arabic_reshaper.reshape(f"{item['qty']}× {item['fa']} — {item['qty'] * item['price']:.2f}€"))
-        draw.text((width - 60, y), item_text, font=body_font, fill=text_color, anchor="ra")
-        draw.text((60, y), item.get('it', 'N/A'), font=latin_font, fill=text_color, anchor="la")
-        y += 50
-    y += 30
-
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"تخفیف / Sconto: {discount:.2f}€")), font=body_font, fill=text_color, anchor="ra")
-    y += 50
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مجموع / Totale: {total:.2f}€")), font=body_font, fill=text_color, anchor="ra")
-    y += 50
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"یادداشت / Nota: {user_data.get('notes', 'بدون یادداشت')}")), font=body_font, fill=text_color, anchor="ra")
-    y += 50
-
-    draw.rectangle([(40, y - 20), (width - 40, y + 120)], outline=border_color, width=2, fill=(240, 230, 210))
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape("✨ فال حافظ / Fal di Hafez:")), font=small_font, fill=text_color, anchor="ra")
-    y += 30
-    enabled_quotes = [q for q in HAFEZ_QUOTES if q.get("enabled", True)]
-    if not enabled_quotes:
-        log.error("No enabled Hafez quotes defined in config.yaml")
-        hafez = {"fa": "بدون نقل‌قول", "it": "Nessuna citazione"}
-    else:
-        hafez = random.choice(enabled_quotes)
-    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(hafez["fa"])), font=nastaliq_font, fill=text_color, anchor="ra")
-    y += 40
-    draw.text((50, y), hafez["it"], font=latin_font, fill=text_color, anchor="la")
-    y += 50
-
-    draw.rectangle([(0, height - 50), (width, height)], fill=footer_color)
-    footer_text = get_display(arabic_reshaper.reshape("بازارینو - طعم ایران در ایتالیا"))
-    draw.text((width // 2, height - 25), footer_text, fill=(255, 255, 255), font=title_font, anchor="mm")
-    draw.text((width // 2, height - 10), "Bazarino - The Taste of Iran in Italy", fill=(255, 255, 255), font=latin_font, anchor="mm")
-
-    buffer = io.BytesIO()
-    img.save(buffer, format="PNG", quality=95)
-    buffer.seek(0)
-    return buffer
 
 # ───────────── Config
 try:
@@ -258,11 +141,10 @@ except ValueError:
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 BASE_URL = os.getenv("BASE_URL").rstrip("/")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", str(uuid.uuid4()))  # Secure random secret
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", str(uuid.uuid4()))
 SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
 PRODUCT_WS = os.getenv("PRODUCT_WORKSHEET", "Sheet2")
 PORT = int(os.getenv("PORT", "8000"))
-
 # ───────────── Google Sheets
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -311,8 +193,6 @@ try:
     except gspread.exceptions.WorksheetNotFound:
         log.warning(f"Uploads worksheet not found, creating new one: {SHEET_CONFIG['uploads']['name']}")
         uploads_ws = wb.add_worksheet(title=SHEET_CONFIG["uploads"]["name"], rows=1000, cols=4)
-    # Validate sheet structure
-    await validate_sheets()  ### Modified: Use async validate_sheets with cleaned headers
 except Exception as e:
     log.error(f"Failed to initialize Google Sheets: {e}", exc_info=True)
     raise SystemExit(f"❗️ خطا در اتصال به Google Sheets: {e}")
@@ -450,195 +330,119 @@ async def alert_admin(pid: str, stock: int):
                 log.error(f"Alert fail attempt {attempt + 1} for product {pid}: {e}", exc_info=True)
                 if attempt < 2:
                     await asyncio.sleep(1)
+# ───────────── Generate Invoice
+async def generate_invoice(order_id: str, user_data: Dict[str, Any], cart: List[Dict[str, Any]], total: float, discount: float) -> io.BytesIO:
+    width, height = 600, 900
+    img = Image.new("RGB", (width, height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
 
-# ───────────── Keyboards
-async def kb_main(ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
-    try:
-        cats = {p["cat"] for p in (await get_products()).values()}
-        rows = [[InlineKeyboardButton(EMOJI.get(c, c), callback_data=f"cat_{c}")] for c in sorted(cats)]
-        cart = ctx.user_data.get("cart", [])
-        cart_summary = f"{m('BTN_CART')} ({cart_count(ctx)} آیتم - {cart_total(cart):.2f}€)" if cart else m("BTN_CART")
-        rows.append([
-            InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
-            InlineKeyboardButton("🔥 پرفروش‌ها / Più venduti", callback_data="bestsellers")
-        ])
-        rows.append([
-            InlineKeyboardButton(cart_summary, callback_data="cart")
-        ])
-        rows.append([
-            InlineKeyboardButton("📞 پشتیبانی / Supporto", callback_data="support")
-        ])
-        return InlineKeyboardMarkup(rows)
-    except Exception as e:
-        log.error(f"Error in kb_main: {e}", exc_info=True)
-        raise
+    header_color = (0, 100, 0)
+    text_color = (0, 0, 0)
+    border_color = (0, 0, 0)
+    footer_color = (0, 80, 0)
 
-async def kb_category(cat: str, ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
-    try:
-        if not cat:
-            log.error("Invalid category: empty or None")
-            return InlineKeyboardMarkup([[InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")]])
-        rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")]
-                for pid, p in (await get_products()).items() if p["cat"] == cat]
-        rows.append([
-            InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
-            InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")
-        ])
-        return InlineKeyboardMarkup(rows)
-    except Exception as e:
-        log.error(f"Error in kb_category for category {cat}: {e}", exc_info=True)
-        raise
-
-def kb_product(pid: str, cat: str) -> InlineKeyboardMarkup:
-    try:
-        p = get_products._data.get(pid, None)
-        if not p:
-            log.error(f"Product {pid} not found in cached products")
-            raise KeyError(f"Product {pid} not found")
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{cat}")],
-            [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{cat}")]
-        ])
-    except Exception as e:
-        log.error(f"Error in kb_product for product {pid}: {e}", exc_info=True)
-        raise
-
-def kb_cart(ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
-    try:
-        cart = ctx.user_data.get("cart", [])
-        rows = []
-        for it in cart:
-            pid = it["id"]
-            rows.append([
-                InlineKeyboardButton("➕", callback_data=f"inc_{pid}"),
-                InlineKeyboardButton(f"{it['qty']}× {it['fa']}", callback_data="ignore"),
-                InlineKeyboardButton("➖", callback_data=f"dec_{pid}"),
-                InlineKeyboardButton("❌", callback_data=f"del_{pid}")
-            ])
-        if ctx.user_data.get("dest"):
-            rows.append([
-                InlineKeyboardButton(m("BTN_ORDER_PERUGIA"), callback_data="order_perugia"),
-                InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
-            ])
-            rows.append([
-                InlineKeyboardButton(m("BTN_CONTINUE"), callback_data="checkout"),
-                InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")
-            ])
-        else:
-            rows.append([
-                InlineKeyboardButton(m("BTN_ORDER_PERUGIA"), callback_data="order_perugia"),
-                InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
-            ])
-            rows.append([
-                InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")
-            ])
-        return InlineKeyboardMarkup(rows)
-    except Exception as e:
-        log.error(f"Error in kb_cart: {e}", exc_info=True)
-        raise
-
-def kb_support() -> InlineKeyboardMarkup:
-    try:
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📷 ارسال تصویر / Invia immagine", callback_data="upload_photo")],
-            [InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")]
-        ])
-    except Exception as e:
-        log.error(f"Error in kb_support: {e}", exc_info=True)
-        raise
-
-# ───────────── Cart operations
-async def add_cart(ctx: ContextTypes.DEFAULT_TYPE, pid: str, qty: int = 1, update: Optional[Update] = None) -> tuple[bool, str]:
-    try:
-        prods = await get_products()
-        if pid not in prods:
-            log.error(f"Product {pid} not found in products")
-            return False, m("STOCK_EMPTY")
-        p = prods[pid]
-        stock = p.get("stock", 0)
-        if not isinstance(stock, int):
-            log.error(f"Invalid stock for product {pid}: {stock}")
-            return False, "❗️ خطا در بررسی موجودی محصول."
-        cart = ctx.user_data.setdefault("cart", [])
-        cur = next((i for i in cart if i["id"] == pid), None)
-        cur_qty = cur["qty"] if cur else 0
-        if stock < cur_qty + qty:
-            log.warning(f"Insufficient stock for {pid}: available={stock}, requested={cur_qty + qty}")
-            return False, m("STOCK_EMPTY")
-        if cur:
-            cur["qty"] += qty
-        else:
-            cart.append(dict(
-                id=pid,
-                fa=p["fa"],
-                it=p.get("it", "N/A"),
-                price=p["price"],
-                weight=p["weight"],
-                qty=qty
-            ))
-        await alert_admin(pid, stock - qty)
+    font_files = ["fonts/Vazir.ttf", "fonts/arial.ttf", "fonts/Nastaliq.ttf"]
+    fonts_exist = all(os.path.exists(f) for f in font_files)
+    if not fonts_exist:
+        log.warning("One or more font files missing, using default fonts")
         try:
-            await asyncio.to_thread(
-                abandoned_cart_ws.append_row,
-                [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                 ctx.user_data.get("user_id", update.effective_user.id if update else 0),
-                 json.dumps(cart)]
-            )
-            log.info(f"Abandoned cart saved for user {ctx.user_data.get('user_id', 'unknown')}")
+            title_font = ImageFont.truetype("fonts/Vazir.ttf", 30) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=30)
+            body_font = ImageFont.truetype("fonts/Vazir.ttf", 24) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=24)
+            small_font = ImageFont.truetype("fonts/Vazir.ttf", 20) if os.path.exists("fonts/Vazir.ttf") else ImageFont.load_default().font_variant(size=20)
+            latin_font = ImageFont.truetype("fonts/arial.ttf", 22) if os.path.exists("fonts/arial.ttf") else ImageFont.load_default().font_variant(size=22)
+            nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26) if os.path.exists("fonts/Nastaliq.ttf") else ImageFont.load_default().font_variant(size=26)
         except Exception as e:
-            log.error(f"Error saving abandoned cart: {e}", exc_info=True)
-        return True, m("CART_ADDED")
-    except Exception as e:
-        log.error(f"Error in add_cart for product {pid}: {e}", exc_info=True)
-        return False, "❗️ خطا در افزودن به سبد خرید."
+            log.warning(f"Font loading error: {e}. Using default fonts.")
+            title_font = ImageFont.load_default().font_variant(size=30)
+            body_font = ImageFont.load_default().font_variant(size=24)
+            small_font = ImageFont.load_default().font_variant(size=20)
+            latin_font = ImageFont.load_default().font_variant(size=22)
+            nastaliq_font = ImageFont.load_default().font_variant(size=26)
+    else:
+        try:
+            title_font = ImageFont.truetype("fonts/Vazir.ttf", 30)
+            body_font = ImageFont.truetype("fonts/Vazir.ttf", 24)
+            small_font = ImageFont.truetype("fonts/Vazir.ttf", 20)
+            latin_font = ImageFont.truetype("fonts/arial.ttf", 22)
+            nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26)
+        except Exception as e:
+            log.warning(f"Font loading error: {e}. Using default fonts.")
+            title_font = ImageFont.load_default().font_variant(size=30)
+            body_font = ImageFont.load_default().font_variant(size=24)
+            small_font = ImageFont.load_default().font_variant(size=20)
+            latin_font = ImageFont.load_default().font_variant(size=22)
+            nastaliq_font = ImageFont.load_default().font_variant(size=26)
 
-def fmt_cart(cart: List[Dict[str, Any]]) -> str:
-    try:
-        if not cart:
-            return m("CART_EMPTY")
-        lines = ["🛍 **سبد خرید / Carrello:**", ""]
-        tot = 0
-        for it in cart:
-            sub = it["qty"] * it["price"]
-            tot += sub
-            lines.append(f"▫️ {it['qty']}× {it['fa']} — {sub:.2f}€")
-        lines.append("")
-        lines.append(f"💶 **جمع / Totale:** {tot:.2f}€")
-        return "\n".join(lines)
-    except Exception as e:
-        log.error(f"Error in fmt_cart: {e}", exc_info=True)
-        return "❗️ خطا در نمایش سبد خرید."
+    if os.path.exists("background_pattern.png"):
+        try:
+            background = Image.open("background_pattern.png").resize((width, height))
+            img.paste(background, (0, 0), background.convert("RGBA"))
+        except Exception as e:
+            log.warning(f"Background pattern loading error: {e}")
+    else:
+        log.warning("Background pattern file not found, using plain background")
 
-# ───────────── Stock update
-async def update_stock(cart: List[Dict[str, Any]]) -> bool:
-    try:
-        records = await asyncio.to_thread(products_ws.get_all_records)
-        for it in cart:
-            pid = it["id"]
-            qty = it["qty"]
-            for idx, row in enumerate(records, start=2):
-                if row["id"] == pid:
-                    try:
-                        new = int(row["stock"]) - qty
-                    except (ValueError, TypeError) as e:
-                        log.error(f"Invalid stock value for {pid} in Google Sheets: {row.get('stock', 'N/A')}. Error: {e}", exc_info=True)
-                        return False
-                    if new < 0:
-                        log.error(f"Cannot update stock for {pid}: negative stock")
-                        return False
-                    await asyncio.to_thread(products_ws.update_cell, idx, 10, new)
-                    (await get_products())[pid]["stock"] = new
-                    log.info(f"Updated stock for {pid}: {new}")
-                    await alert_admin(pid, new)
-        return True
-    except gspread.exceptions.APIError as e:
-        log.error(f"Google Sheets API error during stock update: {e}", exc_info=True)
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در به‌روزرسانی موجودی: {e}")
-        return False
-    except Exception as e:
-        log.error(f"Stock update error: {e}", exc_info=True)
-        return False
+    draw.rectangle([(0, 0), (width, 100)], fill=header_color)
+    header_text = get_display(arabic_reshaper.reshape("فاکتور بازارینو / Fattura Bazarino"))
+    draw.text((width // 2, 50), header_text, fill=(255, 255, 255), font=title_font, anchor="mm")
+
+    if os.path.exists("logo.png"):
+        try:
+            logo = Image.open("logo.png").resize((100, 100), Image.Resampling.LANCZOS)
+            img.paste(logo, (20, 10), logo.convert("RGBA"))
+        except Exception as e:
+            log.warning(f"Logo loading error: {e}")
+
+    y = 120
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"شماره سفارش / Ordine #{order_id}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"نام / Nome: {user_data['name']}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مقصد / Destinazione: {user_data['dest']}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"آدرس / Indirizzo: {user_data['address']} | {user_data['postal']}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape("محصولات / Prodotti:")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.rectangle([(40, y - 10), (width - 40, y + 10 + len(cart) * 50)], outline=border_color, width=2, fill=(255, 250, 240))
+    for item in cart:
+        item_text = get_display(arabic_reshaper.reshape(f"{item['qty']}× {item['fa']} — {item['qty'] * item['price']:.2f}€"))
+        draw.text((width - 60, y), item_text, font=body_font, fill=text_color, anchor="ra")
+        draw.text((60, y), item.get('it', 'N/A'), font=latin_font, fill=text_color, anchor="la")
+        y += 50
+    y += 30
+
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"تخفیف / Sconto: {discount:.2f}€")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"مجموع / Totale: {total:.2f}€")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"یادداشت / Nota: {user_data.get('notes', 'بدون یادداشت')}")), font=body_font, fill=text_color, anchor="ra")
+    y += 50
+
+    draw.rectangle([(40, y - 20), (width - 40, y + 120)], outline=border_color, width=2, fill=(240, 230, 210))
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape("✨ فال حافظ / Fal di Hafez:")), font=small_font, fill=text_color, anchor="ra")
+    y += 30
+    enabled_quotes = [q for q in HAFEZ_QUOTES if q.get("enabled", True)]
+    if not enabled_quotes:
+        log.error("No enabled Hafez quotes defined in config.yaml")
+        hafez = {"fa": "بدون نقل‌قول", "it": "Nessuna citazione"}
+    else:
+        hafez = random.choice(enabled_quotes)
+    draw.text((width - 50, y), get_display(arabic_reshaper.reshape(hafez["fa"])), font=nastaliq_font, fill=text_color, anchor="ra")
+    y += 40
+    draw.text((50, y), hafez["it"], font=latin_font, fill=text_color, anchor="la")
+    y += 50
+
+    draw.rectangle([(0, height - 50), (width, height)], fill=footer_color)
+    footer_text = get_display(arabic_reshaper.reshape("بازارینو - طعم ایران در ایتالیا"))
+    draw.text((width // 2, height - 25), footer_text, fill=(255, 255, 255), font=title_font, anchor="mm")
+    draw.text((width // 2, height - 10), "Bazarino - The Taste of Iran in Italy", fill=(255, 255, 255), font=latin_font, anchor="mm")
+
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG", quality=95)
+    buffer.seek(0)
+    return buffer
 
 # ───────────── Order States
 ASK_NAME, ASK_PHONE, ASK_ADDRESS, ASK_POSTAL, ASK_DISCOUNT, ASK_NOTES = range(6)
@@ -846,6 +650,194 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.error(f"Error in handle_photo: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در آپلود تصویر. لطفاً دوباره امتحان کنید.")
         ctx.user_data["awaiting_photo"] = False
+# ───────────── Keyboards
+async def kb_main(ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    try:
+        cats = {p["cat"] for p in (await get_products()).values()}
+        rows = [[InlineKeyboardButton(EMOJI.get(c, c), callback_data=f"cat_{c}")] for c in sorted(cats)]
+        cart = ctx.user_data.get("cart", [])
+        cart_summary = f"{m('BTN_CART')} ({cart_count(ctx)} آیتم - {cart_total(cart):.2f}€)" if cart else m("BTN_CART")
+        rows.append([
+            InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
+            InlineKeyboardButton("🔥 پرفروش‌ها / Più venduti", callback_data="bestsellers")
+        ])
+        rows.append([
+            InlineKeyboardButton(cart_summary, callback_data="cart")
+        ])
+        rows.append([
+            InlineKeyboardButton("📞 پشتیبانی / Supporto", callback_data="support")
+        ])
+        return InlineKeyboardMarkup(rows)
+    except Exception as e:
+        log.error(f"Error in kb_main: {e}", exc_info=True)
+        raise
+
+async def kb_category(cat: str, ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    try:
+        if not cat:
+            log.error("Invalid category: empty or None")
+            return InlineKeyboardMarkup([[InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")]])
+        rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")]
+                for pid, p in (await get_products()).items() if p["cat"] == cat]
+        rows.append([
+            InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
+            InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")
+        ])
+        return InlineKeyboardMarkup(rows)
+    except Exception as e:
+        log.error(f"Error in kb_category for category {cat}: {e}", exc_info=True)
+        raise
+
+def kb_product(pid: str, cat: str) -> InlineKeyboardMarkup:
+    try:
+        p = get_products._data.get(pid, None)
+        if not p:
+            log.error(f"Product {pid} not found in cached products")
+            raise KeyError(f"Product {pid} not found")
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{cat}")],
+            [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{cat}")]
+        ])
+    except Exception as e:
+        log.error(f"Error in kb_product for product {pid}: {e}", exc_info=True)
+        raise
+
+def kb_cart(ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    try:
+        cart = ctx.user_data.get("cart", [])
+        rows = []
+        for it in cart:
+            pid = it["id"]
+            rows.append([
+                InlineKeyboardButton("➕", callback_data=f"inc_{pid}"),
+                InlineKeyboardButton(f"{it['qty']}× {it['fa']}", callback_data="ignore"),
+                InlineKeyboardButton("➖", callback_data=f"dec_{pid}"),
+                InlineKeyboardButton("❌", callback_data=f"del_{pid}")
+            ])
+        if ctx.user_data.get("dest"):
+            rows.append([
+                InlineKeyboardButton(m("BTN_ORDER_PERUGIA"), callback_data="order_perugia"),
+                InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
+            ])
+            rows.append([
+                InlineKeyboardButton(m("BTN_CONTINUE"), callback_data="checkout"),
+                InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")
+            ])
+        else:
+            rows.append([
+                InlineKeyboardButton(m("BTN_ORDER_PERUGIA"), callback_data="order_perugia"),
+                InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
+            ])
+            rows.append([
+                InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")
+            ])
+        return InlineKeyboardMarkup(rows)
+    except Exception as e:
+        log.error(f"Error in kb_cart: {e}", exc_info=True)
+        raise
+
+def kb_support() -> InlineKeyboardMarkup:
+    try:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📷 ارسال تصویر / Invia immagine", callback_data="upload_photo")],
+            [InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")]
+        ])
+    except Exception as e:
+        log.error(f"Error in kb_support: {e}", exc_info=True)
+        raise
+
+# ───────────── Cart operations
+async def add_cart(ctx: ContextTypes.DEFAULT_TYPE, pid: str, qty: int = 1, update: Optional[Update] = None) -> tuple[bool, str]:
+    try:
+        prods = await get_products()
+        if pid not in prods:
+            log.error(f"Product {pid} not found in products")
+            return False, m("STOCK_EMPTY")
+        p = prods[pid]
+        stock = p.get("stock", 0)
+        if not isinstance(stock, int):
+            log.error(f"Invalid stock for product {pid}: {stock}")
+            return False, "❗️ خطا در بررسی موجودی محصول."
+        cart = ctx.user_data.setdefault("cart", [])
+        cur = next((i for i in cart if i["id"] == pid), None)
+        cur_qty = cur["qty"] if cur else 0
+        if stock < cur_qty + qty:
+            log.warning(f"Insufficient stock for {pid}: available={stock}, requested={cur_qty + qty}")
+            return False, m("STOCK_EMPTY")
+        if cur:
+            cur["qty"] += qty
+        else:
+            cart.append(dict(
+                id=pid,
+                fa=p["fa"],
+                it=p.get("it", "N/A"),
+                price=p["price"],
+                weight=p["weight"],
+                qty=qty
+            ))
+        await alert_admin(pid, stock - qty)
+        try:
+            await asyncio.to_thread(
+                abandoned_cart_ws.append_row,
+                [dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                 ctx.user_data.get("user_id", update.effective_user.id if update else 0),
+                 json.dumps(cart)]
+            )
+            log.info(f"Abandoned cart saved for user {ctx.user_data.get('user_id', 'unknown')}")
+        except Exception as e:
+            log.error(f"Error saving abandoned cart: {e}", exc_info=True)
+        return True, m("CART_ADDED")
+    except Exception as e:
+        log.error(f"Error in add_cart for product {pid}: {e}", exc_info=True)
+        return False, "❗️ خطا در افزودن به سبد خرید."
+
+def fmt_cart(cart: List[Dict[str, Any]]) -> str:
+    try:
+        if not cart:
+            return m("CART_EMPTY")
+        lines = ["🛍 **سبد خرید / Carrello:**", ""]
+        tot = 0
+        for it in cart:
+            sub = it["qty"] * it["price"]
+            tot += sub
+            lines.append(f"▫️ {it['qty']}× {it['fa']} — {sub:.2f}€")
+        lines.append("")
+        lines.append(f"💶 **جمع / Totale:** {tot:.2f}€")
+        return "\n".join(lines)
+    except Exception as e:
+        log.error(f"Error in fmt_cart: {e}", exc_info=True)
+        return "❗️ خطا در نمایش سبد خرید."
+
+# ───────────── Stock update
+async def update_stock(cart: List[Dict[str, Any]]) -> bool:
+    try:
+        records = await asyncio.to_thread(products_ws.get_all_records)
+        for it in cart:
+            pid = it["id"]
+            qty = it["qty"]
+            for idx, row in enumerate(records, start=2):
+                if row["id"] == pid:
+                    try:
+                        new = int(row["stock"]) - qty
+                    except (ValueError, TypeError) as e:
+                        log.error(f"Invalid stock value for {pid} in Google Sheets: {row.get('stock', 'N/A')}. Error: {e}", exc_info=True)
+                        return False
+                    if new < 0:
+                        log.error(f"Cannot update stock for {pid}: negative stock")
+                        return False
+                    await asyncio.to_thread(products_ws.update_cell, idx, 10, new)
+                    (await get_products())[pid]["stock"] = new
+                    log.info(f"Updated stock for {pid}: {new}")
+                    await alert_admin(pid, new)
+        return True
+    except gspread.exceptions.APIError as e:
+        log.error(f"Google Sheets API error during stock update: {e}", exc_info=True)
+        if ADMIN_ID and bot:
+            await bot.send_message(ADMIN_ID, f"⚠️ خطا در به‌روزرسانی موجودی: {e}")
+        return False
+    except Exception as e:
+        log.error(f"Stock update error: {e}", exc_info=True)
+        return False
 
 # ───────────── Push Notifications for Order Status
 async def check_order_status(context: ContextTypes.DEFAULT_TYPE):
@@ -932,11 +924,9 @@ async def cmd_search(u: Update, ctx: ContextTypes.DEFAULT_TYPE):
             btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{p['cat']}"))
             if p["image_url"] and p["image_url"].strip():
                 try:
-                    response = requests.get(p["image_url"], timeout=5)
-                    response.raise_for_status()
                     await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
-                except requests.RequestException as e:
-                    log.warning(f"Failed to download image for product {pid}: {e}")
+                except Exception as e:
+                    log.warning(f"Failed to send image for product {pid}: {e}")
                     await u.message.reply_text(cap, reply_markup=btn)
             else:
                 await u.message.reply_text(cap, reply_markup=btn)
@@ -1004,12 +994,10 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ctx.user_data["current_cat"] = p["cat"]
             if p["image_url"] and p["image_url"].strip():
                 try:
-                    response = requests.get(p["image_url"], timeout=5)
-                    response.raise_for_status()
                     await query.message.delete()
                     await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=kb_product(pid, p["cat"]))
-                except (requests.RequestException, BadRequest) as e:
-                    log.warning(f"Failed to display image for product {pid}: {e}")
+                except Exception as e:
+                    log.warning(f"Failed to send image for product {pid}: {e}")
                     await safe_edit(query, cap, reply_markup=kb_product(pid, p["cat"]))
             else:
                 await safe_edit(query, cap, reply_markup=kb_product(pid, p["cat"]))
@@ -1097,11 +1085,9 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{p['cat']}"))
                 if p["image_url"] and p["image_url"].strip():
                     try:
-                        response = requests.get(p["image_url"], timeout=5)
-                        response.raise_for_status()
                         await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
-                    except requests.RequestException as e:
-                        log.warning(f"Failed to display image for product {pid}: {e}")
+                    except Exception as e:
+                        log.warning(f"Failed to send image for product {pid}: {e}")
                         await query.message.reply_text(cap, reply_markup=btn)
                 else:
                     await query.message.reply_text(cap, reply_markup=btn)
@@ -1112,110 +1098,56 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         elif data == "support":
             await safe_edit(query, m("SUPPORT_MESSAGE"), reply_markup=kb_support())
-
-        elif data == "upload_photo":
-            ctx.user_data["awaiting_photo"] = True
-            await safe_edit(query, m("UPLOAD_PHOTO"))
-
-        else:
-            await safe_edit(query, "❗️ دستور ناشناخته. لطفاً دوباره تلاش کنید.\nComando sconosciuto. Riprova.", reply_markup=await kb_main(ctx))
-
     except Exception as e:
         log.error(f"Error in router: {e}", exc_info=True)
-        await safe_edit(query, "❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.\nErrore nell'elaborazione della richiesta. Riprova.", reply_markup=await kb_main(ctx))
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در router: {e}")
+        await safe_edit(query, "❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.", reply_markup=await kb_main(ctx))
 
-# ───────────── App, webhook and FastAPI
+# ───────────── FastAPI and Webhook
 app = FastAPI()
 
-# Root endpoint to handle GET /
-@app.get("/")
-async def root():
-    return {"message": "Bazarino Telegram Bot is running. Use the Telegram bot to interact."}
-
-# Endpoint to check file existence
-@app.get("/check-files")
-async def check_files():
-    files = [
-        "config.yaml",
-        "messages.json",
-        "/etc/secrets/bazarino-perugia-bot-f37c44dd9b14.json",
-        "fonts/Vazir.ttf",
-        "fonts/arial.ttf",
-        "fonts/Nastaliq.ttf",
-        "background_pattern.png",
-        "logo.png"
-    ]
-    result = {f: os.path.exists(f) for f in files}
-    return result
-
-# Endpoint to check Google Sheets connection
-@app.get("/check-sheets")
-async def check_sheets():
+async def post_init(app: Application):
     try:
-        wb = gc.open("Bazarnio Orders")
-        ws = wb.worksheet("Sheet2")
-        headers = ws.row_values(1)
-        return {"status": "success", "worksheet": ws.title, "headers": headers}
+        log.info("Setting webhook")
+        webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
+        await app.bot.set_webhook(webhook_url, secret_token=WEBHOOK_SECRET)
+        log.info(f"Webhook set to {webhook_url}")
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        log.error(f"Error setting webhook: {e}", exc_info=True)
+        raise
 
-# Webhook endpoint
-@app.post("/webhook/{secret}")
-async def webhook(secret: str, request: Request):
-    global tg_app
-    if secret != WEBHOOK_SECRET:
-        log.error(f"Invalid webhook secret: {secret}")
-        raise HTTPException(status_code=403, detail="Invalid secret")
-    if tg_app is None:
-        log.error("Webhook failed: tg_app is None, likely due to startup failure")
-        raise HTTPException(status_code=500, detail="Application not initialized")
+async def post_shutdown(app: Application):
     try:
-        update = await request.json()
-        await tg_app.process_update(Update.de_json(update, bot))
+        log.info("Deleting webhook")
+        await app.bot.delete_webhook(drop_pending_updates=True)
+        log.info("Webhook deleted successfully")
+    except Exception as e:
+        log.error(f"Error deleting webhook: {e}", exc_info=True)
+
+@app.post(f"/webhook/{WEBHOOK_SECRET}")
+async def webhook(request: Request):
+    try:
+        if not tg_app:
+            log.error("Telegram application not initialized")
+            raise HTTPException(status_code=503, detail="Application not initialized")
+        update = Update.de_json(await request.json(), bot)
+        if not update:
+            log.error("Invalid update received")
+            raise HTTPException(status_code=400, detail="Invalid update")
+        await tg_app.process_update(update)
         return {"status": "ok"}
     except Exception as e:
         log.error(f"Webhook error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-# ───────────── Telegram Webhook Setup and Shutdown
-async def post_init(app: Application):
-    try:
-        webhook_url = f"{BASE_URL}/webhook/{WEBHOOK_SECRET}"
-        log.info(f"Attempting to set webhook to {webhook_url}")
-        for attempt in range(3):
-            try:
-                await app.bot.set_webhook(webhook_url)
-                log.info(f"Webhook set successfully to {webhook_url}")
-                break
-            except Exception as e:
-                log.error(f"Webhook attempt {attempt + 1} failed: {e}", exc_info=True)
-                if attempt == 2:
-                    raise
-                await asyncio.sleep(3)  ### Modified: Increased retry delay to 3 seconds
-    except Exception as e:
-        log.error(f"Failed to set webhook: {e}", exc_info=True)
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در تنظیم Webhook: {e}")
-        raise
-
-async def post_shutdown(app: Application):
-    log.info("Application shutting down")
-    try:
-        await app.bot.delete_webhook()
-        log.info("Webhook deleted successfully")
-    except Exception as e:
-        log.error(f"Failed to delete webhook: {e}", exc_info=True)
-
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
     global tg_app, bot
-    tg_app = None  # Initialize to None
+    tg_app = None
     try:
         log.info("Starting up FastAPI application")
+        log.info("Validating Google Sheets structure")
+        await validate_sheets()
 
-        # Check critical files
         critical_files = [
             "config.yaml",
             "messages.json",
@@ -1240,7 +1172,6 @@ async def lifespan(fastapi_app: FastAPI):
             else:
                 log.info(f"Optional file found: {f}")
 
-        # Validate Telegram token
         log.info("Validating Telegram token")
         try:
             response = requests.get(f"https://api.telegram.org/bot{TOKEN}/getMe", timeout=5)
@@ -1323,7 +1254,5 @@ async def lifespan(fastapi_app: FastAPI):
             except Exception as e:
                 log.error(f"Error during shutdown: {e}", exc_info=True)
 
-app.lifespan = lifespan
-
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
