@@ -9,6 +9,7 @@ Bazarino Telegram Bot – Optimized Version
 - Fixed menu navigation (single menu, back to category, add to cart returns to category)
 - Fixed stock issues, font errors, order saving errors, and FastAPI lifecycle issue
 - Enhanced logging for debugging
+- Compatible with older FastAPI versions using @app.on_event
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ import yaml
 from typing import Dict, Any, List
 import io
 import random
-from contextlib import asynccontextmanager
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -1064,8 +1064,8 @@ async def webhook(secret: str, request: Request):
         log.error(f"Webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@asynccontextmanager
-async def lifespan(fastapi_app: FastAPI):
+@app.on_event("startup")
+async def startup_event():
     global tg_app, bot
     try:
         log.info("Starting up FastAPI application")
@@ -1105,19 +1105,18 @@ async def lifespan(fastapi_app: FastAPI):
         tg_app.add_handler(order_conv)
         tg_app.add_handler(CallbackQueryHandler(router))
         tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-
-        yield
     except Exception as e:
-        log.error(f"Lifespan startup error: {e}")
+        log.error(f"Startup error: {e}")
         if ADMIN_ID and bot:
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در راه‌اندازی اپلیکیشن: {e}")
         raise
-    finally:
-        log.info("Shutting down FastAPI application")
-        if tg_app:
-            await tg_app.shutdown()
 
-app.lifespan(lifespan)
+@app.on_event("shutdown")
+async def shutdown_event():
+    global tg_app
+    log.info("Shutting down FastAPI application")
+    if tg_app:
+        await tg_app.shutdown()
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=PORT)
