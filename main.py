@@ -5,7 +5,7 @@ Bazarino Telegram Bot – Optimized Version
 - Webhook via FastAPI on Render with secure secret token
 - Dynamic products from Google Sheets with versioned cache
 - Features: Invoice with Hafez quote, discount codes, order notes, abandoned cart reminders,
- photo upload (file_id), push notifications (preparing/shipped), weekly backup
+  photo upload (file_id), push notifications (preparing/shipped), weekly backup
 - Enhanced error handling for webhook, lifespan, and file operations
 - Uses Google Fonts as fallback for missing fonts
 - Downloads images online if image_url is provided
@@ -53,7 +53,7 @@ logging.basicConfig(
 log = logging.getLogger("bazarino")
 
 # Global variables
-tg_app = None
+tg_app: Application | None = None
 bot = None
 
 # ───────────── Validate Google Sheets Structure
@@ -122,7 +122,7 @@ def m(k: str) -> str:
     return MSG.get(k, f"[{k}]")
 
 # ───────────── ENV
-for v in ("TELEGRAM_TOKEN", "ADMIN_CHAT_ID", "BASE_URL"):
+for v in ("TELEGRAM_TOKEN", "ADMIN_CHAT тید", "BASE_URL"):
     if not os.getenv(v):
         log.error(f"Missing environment variable: {v}")
         raise SystemExit(f"❗️ متغیر محیطی {v} تنظیم نشده است.")
@@ -145,6 +145,7 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", str(uuid.uuid4()))
 SPREADSHEET = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
 PRODUCT_WS = os.getenv("PRODUCT_WORKSHEET", "Sheet2")
 PORT = int(os.getenv("PORT", "8000"))
+
 # ───────────── Google Sheets
 try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -330,6 +331,7 @@ async def alert_admin(pid: str, stock: int):
                 log.error(f"Alert fail attempt {attempt + 1} for product {pid}: {e}", exc_info=True)
                 if attempt < 2:
                     await asyncio.sleep(1)
+
 # ───────────── Generate Invoice
 async def generate_invoice(order_id: str, user_data: Dict[str, Any], cart: List[Dict[str, Any]], total: float, discount: float) -> io.BytesIO:
     width, height = 600, 900
@@ -650,6 +652,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.error(f"Error in handle_photo: {e}", exc_info=True)
         await update.message.reply_text("❗️ خطا در آپلود تصویر. لطفاً دوباره امتحان کنید.")
         ctx.user_data["awaiting_photo"] = False
+
 # ───────────── Keyboards
 async def kb_main(ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
     try:
@@ -1098,12 +1101,16 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         elif data == "support":
             await safe_edit(query, m("SUPPORT_MESSAGE"), reply_markup=kb_support())
+
+        elif data == "upload_photo":
+            ctx.user_data["awaiting_photo"] = True
+            await safe_edit(query, m("UPLOAD_PHOTO"), reply_markup=kb_support())
     except Exception as e:
         log.error(f"Error in router: {e}", exc_info=True)
         await safe_edit(query, "❗️ خطا در پردازش درخواست. لطفاً دوباره امتحان کنید.", reply_markup=await kb_main(ctx))
 
 # ───────────── FastAPI and Webhook
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 async def post_init(app: Application):
     try:
@@ -1125,6 +1132,7 @@ async def post_shutdown(app: Application):
 
 @app.post(f"/webhook/{WEBHOOK_SECRET}")
 async def webhook(request: Request):
+    global tg_app
     try:
         if not tg_app:
             log.error("Telegram application not initialized")
@@ -1173,17 +1181,22 @@ async def lifespan(fastapi_app: FastAPI):
                 log.info(f"Optional file found: {f}")
 
         log.info("Validating Telegram token")
-        try:
-            response = requests.get(f"https://api.telegram.org/bot{TOKEN}/getMe", timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            if not data.get("ok"):
-                log.error(f"Invalid Telegram token response: {data}")
-                raise ValueError(f"❗️ توکن تلگرام نامعتبر است: {data}")
-            log.info(f"Telegram token validated successfully: {data['result']['username']}")
-        except requests.RequestException as e:
-            log.error(f"Failed to validate Telegram token: {e}", exc_info=True)
-            raise SystemExit(f"❗️ خطا در اعتبارسنجی توکن تلگرام: {e}")
+        for attempt in range(3):
+            try:
+                response = requests.get(f"https://api.telegram.org/bot{TOKEN}/getMe", timeout=5)
+                response.raise_for_status()
+                data = response.json()
+                if not data.get("ok"):
+                    log.error(f"Invalid Telegram token response: {data}")
+                    raise ValueError(f"❗️ توکن تلگرام نامعتبر است: {data}")
+                log.info(f"Telegram token validated successfully: {data['result']['username']}")
+                break
+            except requests.RequestException as e:
+                log.error(f"Failed to validate Telegram token (attempt {attempt + 1}): {e}", exc_info=True)
+                if attempt < 2:
+                    await asyncio.sleep(2)
+                else:
+                    raise SystemExit(f"❗️ خطا در اعتبارسنجی توکن تلگرام پس از 3 تلاش: {e}")
 
         log.info("Building Telegram application")
         builder = ApplicationBuilder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
@@ -1253,6 +1266,29 @@ async def lifespan(fastapi_app: FastAPI):
                 log.info("Telegram application shutdown completed")
             except Exception as e:
                 log.error(f"Error during shutdown: {e}", exc_info=True)
+
+@app.on_event("startup")
+async def on_startup():
+    global tg_app, bot
+    if tg_app is None:
+        try:
+            log.info("Running startup event to initialize Telegram application")
+            builder = ApplicationBuilder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
+            tg_app = builder.build()
+            bot = tg_app.bot
+            await tg_app.initialize()
+            if not tg_app.job_queue:
+                tg_app.job_queue = JobQueue()
+                await tg_app.job_queue.start()
+                job_queue = tg_app.job_queue
+                job_queue.run_daily(send_cart_reminder, time=dt.time(hour=18, minute=0))
+                job_queue.run_repeating(check_order_status, interval=600)
+                job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))
+            log.info("Telegram application initialized in startup event")
+        except Exception as e:
+            log.error(f"Error in startup event: {e}", exc_info=True)
+            tg_app = None
+            raise SystemExit(f"❗️ خطا در راه‌اندازی اپلیکیشن در startup: {e}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
