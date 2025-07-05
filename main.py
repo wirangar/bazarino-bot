@@ -6,9 +6,9 @@ Bazarino Telegram Bot – Optimized Version
 - Dynamic products from Google Sheets with versioned cache
 - Features: Invoice with Hafez quote, discount codes, order notes, abandoned cart reminders,
            photo upload (file_id), push notifications (preparing/shipped), weekly backup
-- Optimized for Render.com with Google Sheets
 - Fixed menu navigation (single menu, back to category, add to cart returns to category)
-- Fixed font and order saving errors
+- Fixed stock issues, font errors, and order saving errors
+- Enhanced logging for debugging
 """
 
 from __future__ import annotations
@@ -61,9 +61,7 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
 
     header_color = (0, 100, 0)
     text_color = (0, 0, 0)
-    accent_color = (255, 215, 0)
     border_color = (0, 0, 0)
-    beige = (245, 245, 220)
     footer_color = (0, 80, 0)
 
     try:
@@ -73,12 +71,12 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
         latin_font = ImageFont.truetype("fonts/arial.ttf", 22)
         nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26)
     except Exception as e:
-        log.warning(f"Font loading error, using default fonts: {e}")
-        title_font = ImageFont.load_default()
-        body_font = ImageFont.load_default()
-        small_font = ImageFont.load_default()
-        latin_font = ImageFont.load_default()
-        nastaliq_font = ImageFont.load_default()
+        log.warning(f"Font loading error: {e}. Using default fonts with adjusted size.")
+        title_font = ImageFont.load_default().font_variant(size=30)
+        body_font = ImageFont.load_default().font_variant(size=24)
+        small_font = ImageFont.load_default().font_variant(size=20)
+        latin_font = ImageFont.load_default().font_variant(size=22)
+        nastaliq_font = ImageFont.load_default().font_variant(size=26)
 
     try:
         background = Image.open("background_pattern.png").resize((width, height))
@@ -257,16 +255,22 @@ async def load_products() -> Dict[str, Dict[str, Any]]:
         products = {}
         for r in records:
             try:
+                stock = r.get("stock", "0")
+                try:
+                    stock = int(stock)
+                except (ValueError, TypeError) as e:
+                    log.warning(f"Invalid stock value for product {r.get('id', 'unknown')}: {stock}. Setting to 0. Error: {e}")
+                    stock = 0
                 products[r["id"]] = dict(
                     cat=r["cat"],
                     fa=r["fa"],
-                    it=r["it"],
+                    it=r.get("it", "N/A"),
                     brand=r["brand"],
                     desc=r["description"],
                     weight=r["weight"],
                     price=float(r["price"]),
                     image_url=r.get("image_url") or None,
-                    stock=int(r.get("stock", 0)),
+                    stock=stock,
                     is_bestseller=r.get("is_bestseller", "FALSE").lower() == "true",
                     version=r.get("version", "0")
                 )
@@ -315,11 +319,14 @@ async def get_products():
             dt.datetime.utcnow() > getattr(get_products, "_ts", dt.datetime.min)):
             get_products._data = await load_products()
             get_products._version = current_version
-            get_products._ts = dt.datetime.utcnow() + dt.timedelta(seconds=60)
+            get_products._ts = dt.datetime.utcnow() + dt.timedelta(seconds=30)
             log.info(f"Loaded {len(get_products._data)} products from Google Sheets, version {current_version}")
         return get_products._data
     except Exception as e:
         log.error(f"Error in get_products: {e}")
+        if hasattr(get_products, "_data"):
+            log.warning("Returning cached products due to error")
+            return get_products._data
         if ADMIN_ID and bot:
             try:
                 await bot.send_message(ADMIN_ID, f"⚠️ خطا در بارگذاری محصولات: {e}")
@@ -339,31 +346,36 @@ cart_count = lambda ctx: sum(i["qty"] for i in ctx.user_data.get("cart", []))
 
 async def safe_edit(q, *a, **k):
     try:
-        await q.edit_message_text(*a, **k)
+        await q.message.delete()
+        await q.message.reply_text(*a, **k)
     except BadRequest as e:
         if "not modified" in str(e) or "no text in the message to edit" in str(e):
             await q.message.reply_text(*a, **k)
         else:
             log.error(f"Edit msg error: {e}")
+            await q.message.reply_text(*a, **k)
     except NetworkError as e:
         log.error(f"Network error: {e}")
+        await q.message.reply_text(*a, **k)
 
 async def alert_admin(pid, stock):
     if stock <= LOW_STOCK_TH and ADMIN_ID:
         for _ in range(3):
             try:
-                await bot.send_message(ADMIN_ID, f"⚠️ موجودی کم {stock}: {(await get_products())[pid]['fa']}")
-                log.info(f"Low stock alert sent for {(await get_products())[pid]['fa']}")
+                products = await get_products()
+                product_name = products.get(pid, {}).get("fa", "Unknown")
+                await bot.send_message(ADMIN_ID, f"⚠️ موجودی کم {stock}: {product_name}")
+                log.info(f"Low stock alert sent for {product_name}")
                 break
             except Exception as e:
-                log.error(f"Alert fail attempt: {e}")
+                log.error(f"Alert fail attempt for product {pid}: {e}")
                 await asyncio.sleep(1)
 
 # ───────────── Keyboards
 async def kb_main(ctx):
     try:
         cats = {p["cat"] for p in (await get_products()).values()}
-        rows = [[InlineKeyboardButton(EMOJI.get(c, c), callback_data=f"cat_{c}")] for c in cats]
+        rows = [[InlineKeyboardButton(EMOJI.get(c, c), callback_data=f"cat_{c}")] for c in sorted(cats)]
         cart = ctx.user_data.get("cart", [])
         cart_summary = f"{m('BTN_CART')} ({cart_count(ctx)} آیتم - {cart_total(cart):.2f}€)" if cart else m("BTN_CART")
         rows.append([
@@ -383,6 +395,9 @@ async def kb_main(ctx):
 
 async def kb_category(cat, ctx):
     try:
+        if not cat:
+            log.error("Invalid category: empty or None")
+            return InlineKeyboardMarkup([[InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")]])
         rows = [[InlineKeyboardButton(f"{p['fa']} / {p['it']}", callback_data=f"show_{pid}")]
                 for pid, p in (await get_products()).items() if p["cat"] == cat]
         rows.append([
@@ -391,18 +406,21 @@ async def kb_category(cat, ctx):
         ])
         return InlineKeyboardMarkup(rows)
     except Exception as e:
-        log.error(f"Error in kb_category: {e}")
+        log.error(f"Error in kb_category for category {cat}: {e}")
         raise
 
 def kb_product(pid, cat):
     try:
-        p = get_products._data[pid] if hasattr(get_products, "_data") else (asyncio.run(get_products()))[pid]
+        p = get_products._data.get(pid, None)
+        if not p:
+            log.error(f"Product {pid} not found in cached products")
+            raise KeyError(f"Product {pid} not found")
         return InlineKeyboardMarkup([
             [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{cat}")],
             [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{cat}")]
         ])
     except Exception as e:
-        log.error(f"Error in kb_product: {e}")
+        log.error(f"Error in kb_product for product {pid}: {e}")
         raise
 
 def kb_cart(ctx):
@@ -454,18 +472,30 @@ async def add_cart(ctx, pid, qty=1, update=None):
     try:
         prods = await get_products()
         if pid not in prods:
+            log.error(f"Product {pid} not found in products")
             return False, m("STOCK_EMPTY")
         p = prods[pid]
-        stock = p["stock"]
+        stock = p.get("stock", 0)
+        if not isinstance(stock, int):
+            log.error(f"Invalid stock for product {pid}: {stock}")
+            return False, "❗️ خطا در بررسی موجودی محصول."
         cart = ctx.user_data.setdefault("cart", [])
         cur = next((i for i in cart if i["id"] == pid), None)
         cur_qty = cur["qty"] if cur else 0
         if stock < cur_qty + qty:
+            log.warning(f"Insufficient stock for {pid}: available={stock}, requested={cur_qty + qty}")
             return False, m("STOCK_EMPTY")
         if cur:
             cur["qty"] += qty
         else:
-            cart.append(dict(id=pid, fa=p["fa"], it=p["it"], price=p["price"], weight=p["weight"], qty=qty))
+            cart.append(dict(
+                id=pid,
+                fa=p["fa"],
+                it=p.get("it", "N/A"),
+                price=p["price"],
+                weight=p["weight"],
+                qty=qty
+            ))
         await alert_admin(pid, stock - qty)
         try:
             await asyncio.to_thread(
@@ -474,11 +504,12 @@ async def add_cart(ctx, pid, qty=1, update=None):
                  ctx.user_data.get("user_id", update.effective_user.id if update else 0),
                  json.dumps(cart)]
             )
+            log.info(f"Abandoned cart saved for user {ctx.user_data.get('user_id', 'unknown')}")
         except Exception as e:
             log.error(f"Error saving abandoned cart: {e}")
         return True, m("CART_ADDED")
     except Exception as e:
-        log.error(f"Error in add_cart: {e}")
+        log.error(f"Error in add_cart for product {pid}: {e}")
         return False, "❗️ خطا در افزودن به سبد خرید."
 
 def fmt_cart(cart):
@@ -507,7 +538,11 @@ async def update_stock(cart):
             qty = it["qty"]
             for idx, row in enumerate(records, start=2):
                 if row["id"] == pid:
-                    new = int(row["stock"]) - qty
+                    try:
+                        new = int(row["stock"]) - qty
+                    except (ValueError, TypeError) as e:
+                        log.error(f"Invalid stock value for {pid} in Google Sheets: {row.get('stock', 'N/A')}. Error: {e}")
+                        return False
                     if new < 0:
                         log.error(f"Cannot update stock for {pid}: negative stock")
                         return False
@@ -533,7 +568,7 @@ async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         q = update.callback_query
         if not ctx.user_data.get("dest"):
-            await q.message.reply_text(f"لطفاً مقصد را انتخاب کنید:\nScegli la destinazione:\n\n{fmt_cart(ctx.user_data.get('cart', []))}", reply_markup=kb_cart(ctx), parse_mode="HTML")
+            await q.message.reply_text(f"{m('CART_GUIDE')}\n\n{fmt_cart(ctx.user_data.get('cart', []))}", reply_markup=kb_cart(ctx), parse_mode="HTML")
             return ConversationHandler.END
         ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
         ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
@@ -860,6 +895,10 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if data.startswith("cat_"):
             cat = data[4:]
+            if not cat:
+                log.error("Empty category in cat_ callback")
+                await safe_edit(query, "❗️ دسته‌بندی نامعتبر است.", reply_markup=await kb_main(ctx))
+                return
             ctx.user_data["current_cat"] = cat
             await safe_edit(query, f"دسته‌بندی: {EMOJI.get(cat, cat)}", reply_markup=await kb_category(cat, ctx))
 
@@ -867,6 +906,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             pid = data[5:]
             prods = await get_products()
             if pid not in prods:
+                log.error(f"Product {pid} not found in show_ callback")
                 await safe_edit(query, m("STOCK_EMPTY"), reply_markup=await kb_main(ctx))
                 return
             p = prods[pid]
@@ -884,10 +924,15 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         elif data.startswith("add_"):
             parts = data.split("_")
+            if len(parts) != 3:
+                log.error(f"Invalid add_ callback data: {data}")
+                await safe_edit(query, "❗️ خطا در افزودن محصول.", reply_markup=await kb_main(ctx))
+                return
             pid, cat = parts[1], parts[2]
             success, msg = await add_cart(ctx, pid, update=update)
             prods = await get_products()
             if pid not in prods:
+                log.error(f"Product {pid} not found after add_cart")
                 await safe_edit(query, m("STOCK_EMPTY"), reply_markup=await kb_category(cat, ctx))
                 return
             p = prods[pid]
@@ -919,7 +964,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif data == "cart":
             cart = ctx.user_data.get("cart", [])
             if not ctx.user_data.get("dest"):
-                await safe_edit(query, f"لطفاً مقصد را انتخاب کنید:\nScegli la destinazione:\n\n{fmt_cart(cart)}", reply_markup=kb_cart(ctx), parse_mode="HTML")
+                await safe_edit(query, f"{m('CART_GUIDE')}\n\n{fmt_cart(cart)}", reply_markup=kb_cart(ctx), parse_mode="HTML")
             else:
                 await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(ctx), parse_mode="HTML")
 
@@ -938,6 +983,10 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         elif data.startswith("back_cat_"):
             cat = data[9:]
+            if not cat:
+                log.error("Invalid category in back_cat_ callback")
+                await safe_edit(query, "❗️ دسته‌بندی نامعتبر است.", reply_markup=await kb_main(ctx))
+                return
             ctx.user_data["current_cat"] = cat
             await safe_edit(query, f"دسته‌بندی: {EMOJI.get(cat, cat)}", reply_markup=await kb_category(cat, ctx))
 
@@ -980,6 +1029,8 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await bot.send_message(ADMIN_ID, f"⚠️ خطا در router: {e}")
 
 # ───────────── App, webhook and FastAPI
+app = FastAPI()
+
 async def post_init(app: Application):
     try:
         log.info("Application initialized")
@@ -999,7 +1050,20 @@ async def post_shutdown(app: Application):
     except Exception as e:
         log.error(f"Failed to delete webhook: {e}")
 
-async def lifespan(app: FastAPI):
+@app.post("/webhook/{secret}")
+async def webhook(secret: str, request: Request):
+    if secret != WEBHOOK_SECRET:
+        log.error(f"Invalid webhook secret: {secret}")
+        raise HTTPException(status_code=403, detail="Invalid secret")
+    try:
+        update = await request.json()
+        await tg_app.process_update(Update.de_json(update, bot))
+        return {"status": "ok"}
+    except Exception as e:
+        log.error(f"Webhook error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def lifespan(fastapi_app: FastAPI):
     global tg_app, bot
     try:
         builder = ApplicationBuilder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown)
@@ -1013,53 +1077,38 @@ async def lifespan(app: FastAPI):
         job_queue.run_daily(send_cart_reminder, time=dt.time(hour=18, minute=0))
         job_queue.run_repeating(check_order_status, interval=600)
         job_queue.run_daily(backup_sheets, time=dt.time(hour=0, minute=0))
-        tg_app.add_handler(CommandHandler("start", cmd_start))
-        tg_app.add_handler(CommandHandler("search", cmd_search))
-        tg_app.add_handler(CommandHandler("about", cmd_about))
-        tg_app.add_handler(CommandHandler("privacy", cmd_privacy))
-        tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        tg_app.add_handler(ConversationHandler(
+
+        # Conversation Handler for order process
+        order_conv = ConversationHandler(
             entry_points=[CallbackQueryHandler(start_order, pattern="^checkout$")],
             states={
                 ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_phone)],
                 ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_address)],
                 ASK_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_postal)],
                 ASK_POSTAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_discount)],
-                ASK_DISCOUNT: [MessageHandler(filters.TEXT | filters.COMMAND, ask_notes)],
-                ASK_NOTES: [MessageHandler(filters.TEXT | filters.COMMAND, confirm_order)],
+                ASK_DISCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_notes)],
+                ASK_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_order)],
             },
-            fallbacks=[CommandHandler("cancel", cancel_order)]
-        ))
+            fallbacks=[CommandHandler("cancel", cancel_order)],
+            per_user=True,
+            per_chat=True
+        )
+
+        # Add handlers
+        tg_app.add_handler(CommandHandler("start", cmd_start))
+        tg_app.add_handler(CommandHandler("about", cmd_about))
+        tg_app.add_handler(CommandHandler("privacy", cmd_privacy))
+        tg_app.add_handler(CommandHandler("search", cmd_search))
+        tg_app.add_handler(order_conv)
         tg_app.add_handler(CallbackQueryHandler(router))
+        tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+
         yield
-        await tg_app.shutdown()
-    except Exception as e:
-        log.error(f"Error in lifespan: {e}")
-        if ADMIN_ID and bot:
-            await bot.send_message(ADMIN_ID, f"⚠️ خطا در راه‌اندازی برنامه: {e}")
-        raise
+    finally:
+        if tg_app:
+            await tg_app.shutdown()
 
-app = FastAPI(lifespan=lifespan)
-
-@app.post("/webhook/{secret}")
-async def wh(req: Request, secret: str):
-    try:
-        if secret != WEBHOOK_SECRET:
-            log.error("Invalid webhook secret")
-            raise HTTPException(status_code=403, detail="Invalid secret")
-        data = await req.json()
-        update = Update.de_json(data, bot)
-        if not update:
-            log.error("Invalid webhook update received")
-            raise HTTPException(status_code=400, detail="Invalid update")
-        await tg_app.process_update(update)
-        return {"ok": True}
-    except Exception as e:
-        log.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-def main():
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+app.lifecycle(lifespan)
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
