@@ -9,6 +9,7 @@ Bazarino Telegram Bot – Optimized for Render.com
 - Removed strict input validation
 - Added order review and edit functionality
 - Compatible with provided config.yaml and messages.json
+- Fixed CallbackContext and FastAPI lifespan issues
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import random
 import textwrap
 import asyncio
 from datetime import datetime as dt, timedelta
+from contextlib import asynccontextmanager
 
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -1073,11 +1075,12 @@ async def webhook(request: Request):
         log.error(f"Webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ───────────── Startup
-@app.on_event("startup")
-async def startup_event():
+# ───────────── Lifespan Handler
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global tg_app, bot, scheduler
     try:
+        # Startup
         tg_app = ApplicationBuilder().token(TOKEN).build()
         bot = tg_app.bot
         await bot.set_webhook(f"{BASE_URL}/webhook", secret_token=WEBHOOK_SECRET)
@@ -1122,21 +1125,18 @@ async def startup_event():
         tg_app.add_handler(conv_handler)
 
         scheduler = AsyncIOScheduler()
-        scheduler.add_job(abandoned_cart_reminder, IntervalTrigger(seconds=24*3600), args=[ContextTypes.DEFAULT_TYPE()])
-        scheduler.add_job(weekly_backup, IntervalTrigger(seconds=7*24*3600), args=[ContextTypes.DEFAULT_TYPE()])
+        scheduler.add_job(abandoned_cart_reminder, IntervalTrigger(seconds=24*3600), args=[tg_app])
+        scheduler.add_job(weekly_backup, IntervalTrigger(seconds=7*24*3600), args=[tg_app])
         scheduler.start()
         log.info("APScheduler started")
 
         await tg_app.initialize()
         await tg_app.start()
         log.info("Telegram app started")
-    except Exception as e:
-        log.error(f"Startup error: {e}")
-        raise SystemExit(f"❗️ خطا در راه‌اندازی: {e}")
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    try:
+        yield  # Application runs here
+
+        # Shutdown
         if scheduler:
             scheduler.shutdown()
             log.info("APScheduler stopped")
@@ -1145,7 +1145,10 @@ async def shutdown_event():
             await tg_app.shutdown()
             log.info("Telegram app stopped")
     except Exception as e:
-        log.error(f"Shutdown error: {e}")
+        log.error(f"Lifespan error: {e}")
+        raise SystemExit(f"❗️ خطا در راه‌اندازی: {e}")
+
+app.router.lifespan_context = lifespan
 
 if __name__ == "__main__":
     import uvicorn
