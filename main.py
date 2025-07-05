@@ -7,6 +7,8 @@ Bazarino Telegram Bot – Optimized Version
 - Features: Invoice with Hafez quote, discount codes, order notes, abandoned cart reminders,
            photo upload (file_id), push notifications (preparing/shipped), weekly backup
 - Optimized for Render.com with Google Sheets
+- Fixed menu navigation (single menu, back to category, add to cart returns to category)
+- Fixed font and order saving errors
 """
 
 from __future__ import annotations
@@ -71,18 +73,18 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
         latin_font = ImageFont.truetype("fonts/arial.ttf", 22)
         nastaliq_font = ImageFont.truetype("fonts/Nastaliq.ttf", 26)
     except Exception as e:
-        log.error(f"Font loading error: {e}")
-        title_font = ImageFont.load_default(size=30)
-        body_font = ImageFont.load_default(size=24)
-        small_font = ImageFont.load_default(size=20)
-        latin_font = ImageFont.load_default(size=22)
-        nastaliq_font = ImageFont.load_default(size=26)
+        log.warning(f"Font loading error, using default fonts: {e}")
+        title_font = ImageFont.load_default()
+        body_font = ImageFont.load_default()
+        small_font = ImageFont.load_default()
+        latin_font = ImageFont.load_default()
+        nastaliq_font = ImageFont.load_default()
 
     try:
         background = Image.open("background_pattern.png").resize((width, height))
         img.paste(background, (0, 0), background.convert("RGBA"))
     except Exception as e:
-        log.error(f"Background pattern loading error: {e}")
+        log.warning(f"Background pattern loading error: {e}")
 
     draw.rectangle([(0, 0), (width, 100)], fill=header_color)
     header_text = get_display(arabic_reshaper.reshape("فاکتور بازارینو / Fattura Bazarino"))
@@ -92,7 +94,7 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
         logo = Image.open("logo.png").resize((100, 100), Image.Resampling.LANCZOS)
         img.paste(logo, (20, 10), logo.convert("RGBA"))
     except Exception as e:
-        log.error(f"Logo loading error: {e}")
+        log.warning(f"Logo loading error: {e}")
 
     y = 120
     draw.text((width - 50, y), get_display(arabic_reshaper.reshape(f"شماره سفارش / Ordine #{order_id}")), font=body_font, fill=text_color, anchor="ra")
@@ -110,7 +112,7 @@ async def generate_invoice(order_id, user_data, cart, total, discount):
     for item in cart:
         item_text = get_display(arabic_reshaper.reshape(f"{item['qty']}× {item['fa']} — {item['qty'] * item['price']:.2f}€"))
         draw.text((width - 60, y), item_text, font=body_font, fill=text_color, anchor="ra")
-        draw.text((60, y), f"{item['it']}", font=latin_font, fill=text_color, anchor="la")
+        draw.text((60, y), item.get('it', 'N/A'), font=latin_font, fill=text_color, anchor="la")
         y += 50
     y += 30
 
@@ -385,19 +387,19 @@ async def kb_category(cat, ctx):
                 for pid, p in (await get_products()).items() if p["cat"] == cat]
         rows.append([
             InlineKeyboardButton(m("BTN_SEARCH"), callback_data="search"),
-            InlineKeyboardButton(m("BTN_BACK"), callback_data="back")
+            InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")
         ])
         return InlineKeyboardMarkup(rows)
     except Exception as e:
         log.error(f"Error in kb_category: {e}")
         raise
 
-def kb_product(pid):
+def kb_product(pid, cat):
     try:
         p = get_products._data[pid] if hasattr(get_products, "_data") else (asyncio.run(get_products()))[pid]
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}")],
-            [InlineKeyboardButton(m("BTN_BACK"), callback_data="back")]
+            [InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{cat}")],
+            [InlineKeyboardButton(m("BTN_BACK"), callback_data=f"back_cat_{cat}")]
         ])
     except Exception as e:
         log.error(f"Error in kb_product: {e}")
@@ -422,7 +424,7 @@ def kb_cart(ctx):
             ])
             rows.append([
                 InlineKeyboardButton(m("BTN_CONTINUE"), callback_data="checkout"),
-                InlineKeyboardButton(m("BTN_BACK"), callback_data="back")
+                InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")
             ])
         else:
             rows.append([
@@ -430,7 +432,7 @@ def kb_cart(ctx):
                 InlineKeyboardButton(m("BTN_ORDER_ITALY"), callback_data="order_italy")
             ])
             rows.append([
-                InlineKeyboardButton(m("BTN_BACK"), callback_data="back")
+                InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")
             ])
         return InlineKeyboardMarkup(rows)
     except Exception as e:
@@ -441,7 +443,7 @@ def kb_support():
     try:
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("📷 ارسال تصویر / Invia immagine", callback_data="upload_photo")],
-            [InlineKeyboardButton(m("BTN_BACK"), callback_data="back")]
+            [InlineKeyboardButton(m("BTN_BACK"), callback_data="back_main")]
         ])
     except Exception as e:
         log.error(f"Error in kb_support: {e}")
@@ -463,7 +465,7 @@ async def add_cart(ctx, pid, qty=1, update=None):
         if cur:
             cur["qty"] += qty
         else:
-            cart.append(dict(id=pid, fa=p["fa"], price=p["price"], weight=p["weight"], qty=qty))
+            cart.append(dict(id=pid, fa=p["fa"], it=p["it"], price=p["price"], weight=p["weight"], qty=qty))
         await alert_admin(pid, stock - qty)
         try:
             await asyncio.to_thread(
@@ -809,7 +811,7 @@ async def cmd_search(u, ctx: ContextTypes.DEFAULT_TYPE):
             return
         for pid, p in hits[:5]:
             cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
-            btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}"))
+            btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{p['cat']}"))
             if p["image_url"] and p["image_url"].strip():
                 await u.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
             else:
@@ -853,7 +855,7 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         data = query.data
 
-        if data != "back":
+        if data != "back_main" and not data.startswith("back_cat_"):
             ctx.user_data["last_menu"] = data
 
         if data.startswith("cat_"):
@@ -870,18 +872,27 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             p = prods[pid]
             cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
             ctx.user_data["current_product"] = pid
+            ctx.user_data["current_cat"] = p["cat"]
             if p["image_url"] and p["image_url"].strip():
-                await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=kb_product(pid))
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=kb_product(pid, p["cat"]))
             else:
-                await safe_edit(query, cap, reply_markup=kb_product(pid))
+                await safe_edit(query, cap, reply_markup=kb_product(pid, p["cat"]))
 
         elif data.startswith("add_"):
-            pid = data[4:]
+            parts = data.split("_")
+            pid, cat = parts[1], parts[2]
             success, msg = await add_cart(ctx, pid, update=update)
             prods = await get_products()
+            if pid not in prods:
+                await safe_edit(query, m("STOCK_EMPTY"), reply_markup=await kb_category(cat, ctx))
+                return
             p = prods[pid]
             cap = f"{msg}\n\n{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
-            await safe_edit(query, cap, reply_markup=kb_product(pid))
+            await safe_edit(query, cap, reply_markup=await kb_category(cat, ctx))
 
         elif data.startswith("inc_"):
             pid = data[4:]
@@ -922,25 +933,8 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cart = ctx.user_data.get("cart", [])
             await safe_edit(query, f"مقصد: Italia\n\n{fmt_cart(cart)}", reply_markup=kb_cart(ctx), parse_mode="HTML")
 
-        elif data == "back":
-            last_menu = ctx.user_data.get("last_menu", "")
-            if last_menu.startswith("show_"):
-                pid = last_menu[5:]
-                prods = await get_products()
-                if pid in prods:
-                    p = prods[pid]
-                    cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
-                    await safe_edit(query, cap, reply_markup=kb_product(pid))
-                else:
-                    await safe_edit(query, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
-            elif last_menu.startswith("cat_"):
-                cat = last_menu[4:]
-                await safe_edit(query, f"دسته‌بندی: {EMOJI.get(cat, cat)}", reply_markup=await kb_category(cat, ctx))
-            elif last_menu == "cart":
-                cart = ctx.user_data.get("cart", [])
-                await safe_edit(query, fmt_cart(cart), reply_markup=kb_cart(ctx), parse_mode="HTML")
-            else:
-                await safe_edit(query, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
+        elif data == "back_main":
+            await safe_edit(query, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
 
         elif data.startswith("back_cat_"):
             cat = data[9:]
@@ -953,14 +947,18 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if not bestsellers:
                 await safe_edit(query, "❌ هیچ محصول پرفروشی یافت نشد.\nNessun prodotto bestseller trovato.", reply_markup=await kb_main(ctx))
                 return
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
             for pid, p in bestsellers[:5]:
                 cap = f"{p['fa']} / {p['it']}\n{p['desc']}\n{p['price']}€\nموجودی / Stock: {p['stock']}"
-                btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}"))
+                btn = InlineKeyboardMarkup.from_button(InlineKeyboardButton(m("CART_ADDED").split("\n")[0], callback_data=f"add_{pid}_{p['cat']}"))
                 if p["image_url"] and p["image_url"].strip():
                     await query.message.reply_photo(p["image_url"], caption=cap, reply_markup=btn)
                 else:
                     await query.message.reply_text(cap, reply_markup=btn)
-            await safe_edit(query, "🔥 محصولات پرفروش / Prodotti più venduti", reply_markup=await kb_main(ctx))
+            await query.message.reply_text("🔥 محصولات پرفروش / Prodotti più venduti", reply_markup=await kb_main(ctx))
 
         elif data == "search":
             await safe_edit(query, m("SEARCH_USAGE"))
