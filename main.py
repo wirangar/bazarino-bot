@@ -11,7 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 import arabic_reshaper
 from bidi.algorithm import get_display
 import gspread
-import requestsimport uvicorn
+import requests
 import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
@@ -35,7 +35,6 @@ from telegram.ext import (
     filters
 )
 
-
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=logging.INFO)
 log = logging.getLogger("bazarino")
 
@@ -46,12 +45,14 @@ with open("messages.json", "r", encoding="utf-8") as f:
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_CHAT_ID", 0))
+
+# ✅ خواندن فایل Service Account از مسیر Secret File
 GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS")
 if not GOOGLE_CREDS_PATH or not os.path.exists(GOOGLE_CREDS_PATH):
     raise FileNotFoundError("GOOGLE_CREDS path is not set or does not exist.")
 with open(GOOGLE_CREDS_PATH, "r") as f:
     GOOGLE_CREDS = json.load(f)
-GOOGLE_CREDS = json.loads(os.getenv("GOOGLE_CREDS", "{}"))
+
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "EhsaNegar1394")
 PORT = int(os.getenv("PORT", 8000))
@@ -77,6 +78,7 @@ discounts_ws = ss.worksheet("Sheet3")
 log.info(f"Worksheet loaded: discounts=Sheet3")
 uploads_ws = ss.worksheet("UserUploads")
 log.info(f"Worksheet loaded: uploads=UserUploads")
+
 
 async def validate_sheets():
     try:
