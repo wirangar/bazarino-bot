@@ -14,10 +14,26 @@ import gspread
 import requests
 import yaml
 from fastapi import FastAPI, HTTPException, Request
-from telegram.ext import Application, ApplicationBuilder, ContextTypes, JobQueue
-from python_telegram_bot.types import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
-from python_telegram_bot.handlers import CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler
-from python_telegram_bot.filters import filters
+
+# ✅ ایمپورت‌های درست برای کتابخانه python-telegram-bot v21.4
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardRemove
+)
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    ContextTypes,
+    JobQueue,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    filters
+)
+
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", level=logging.INFO)
 log = logging.getLogger("bazarino")
