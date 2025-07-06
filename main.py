@@ -11,7 +11,8 @@ from PIL import Image, ImageDraw, ImageFont
 import arabic_reshaper
 from bidi.algorithm import get_display
 import gspread
-import requests
+import requestsimport uvicorn
+import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 
@@ -45,7 +46,11 @@ with open("messages.json", "r", encoding="utf-8") as f:
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_CHAT_ID", 0))
-BASE_URL = os.getenv("BASE_URL")
+GOOGLE_CREDS_PATH = os.getenv("GOOGLE_CREDS")
+if not GOOGLE_CREDS_PATH or not os.path.exists(GOOGLE_CREDS_PATH):
+    raise FileNotFoundError("GOOGLE_CREDS path is not set or does not exist.")
+with open(GOOGLE_CREDS_PATH, "r") as f:
+    GOOGLE_CREDS = json.load(f)
 GOOGLE_CREDS = json.loads(os.getenv("GOOGLE_CREDS", "{}"))
 SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "Bazarnio Orders")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "EhsaNegar1394")
