@@ -949,29 +949,33 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML"
                 )
             return
-        
+
         if d.startswith("add_"):
-            pid = d[4:]
-            ok, msg = await add_cart(ctx, pid, qty=1, update=update)
-            await q.answer(msg, show_alert=not ok)
+    pid = d[4:]
+    try:
+        ok, msg = await add_cart(ctx, pid, qty=1, update=update)
+        await q.answer(msg, show_alert=not ok)
 
-            cat = (await get_products())[pid]["cat"]
+        cat = (await get_products())[pid]["cat"]
 
-    # حذف پیام قبلی (عکس یا متن)
+        # حذف پیام قبلی (عکس یا متن)
         try:
             await q.message.delete()
-            except Exception as e:
+        except Exception as e:
             log.warning(f"Delete failed: {e}")
 
-    # ارسال مجدد منوی دسته‌بندی
+        # ارسال مجدد منوی دسته‌بندی
         await ctx.bot.send_message(
             chat_id=q.message.chat.id,
             text=EMOJI.get(cat, cat),
             reply_markup=await kb_category(cat, ctx),
             parse_mode="HTML"
-            )
-         return
-
+        )
+        return
+    except Exception as e:
+        log.error(f"Error in add_: {e}")
+        await q.message.reply_text("❗️ خطا در افزودن به سبد خرید.")
+        return
 
         if d.startswith("back_cat_"):
             cat = d.split("_")[2]
