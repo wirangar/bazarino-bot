@@ -14,7 +14,7 @@ import gspread
 import requests
 import yaml
 from fastapi import FastAPI, HTTPException, Request
-from python_telegram_bot import Application, ApplicationBuilder, ContextTypes, JobQueue
+from telegram.ext import Application, ApplicationBuilder, ContextTypes, JobQueue
 from python_telegram_bot.types import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from python_telegram_bot.handlers import CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler
 from python_telegram_bot.filters import filters
