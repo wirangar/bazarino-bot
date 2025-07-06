@@ -892,9 +892,32 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         q = update.callback_query
         d = q.data
         await q.answer()
+        if d == "cart":
+            try:
+                cart = ctx.user_data.get("cart", [])
+                if not cart:
+                    await q.message.reply_text("🛒 سبد خرید شما خالی است.")
+                    return
+
+                lines = []
+                total = 0
+                for item in cart:
+                    name = item.get("name", "نامشخص")
+                    qty = item.get("qty", 1)
+                    price = item.get("price", 0)
+                    total += qty * price
+                    lines.append(f"• {name} × {qty} = {qty * price:.2f}€")
+
+                text = "🛒 <b>سبد خرید شما:</b>\n" + "\n".join(lines)
+                text += f"\n\n💰 <b>جمع کل:</b> {total:.2f}€"
+
+                await q.message.reply_text(text, parse_mode="HTML")
+            except Exception as e:
+                log.error(f"Error showing cart: {e}")
+                await q.message.reply_text("❗️مشکل در نمایش سبد خرید.")
+            return
 
 
-    elif d == "cart":
         try:
             cart = ctx.user_data.get("cart", [])
             if not cart:
