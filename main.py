@@ -950,21 +950,16 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
             return
 
-if d.startswith("add_"):
+        if d.startswith("add_"):
             pid = d[4:]
             try:
                 ok, msg = await add_cart(ctx, pid, qty=1, update=update)
                 await q.answer(msg, show_alert=not ok)
-
                 cat = (await get_products())[pid]["cat"]
-
-                # حذف پیام قبلی (عکس یا متن)
                 try:
                     await q.message.delete()
                 except Exception as e:
                     log.warning(f"Delete failed: {e}")
-
-                # ارسال مجدد منوی دسته‌بندی
                 await ctx.bot.send_message(
                     chat_id=q.message.chat.id,
                     text=EMOJI.get(cat, cat),
