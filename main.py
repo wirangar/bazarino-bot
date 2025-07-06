@@ -199,7 +199,7 @@ try:
     gc = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(CREDS_JSON, scope))
     try:
         wb = gc.open(SPREADSHEET)
-    except gspread.exceptions.SpreadsheetNotFound:
+    except gspread.exceptions.S SpreadNotFound:
         log.error(f"Spreadsheet '{SPREADSHEET}' not found. Please check the SPREADSHEET_NAME and access permissions.")
         raise SystemExit(f"❗️ فایل Google Spreadsheet با نام '{SPREADSHEET}' یافت نشد.")
     try:
@@ -317,15 +317,33 @@ EMOJI = {
 cart_total = lambda c: sum(i["qty"] * i["price"] for i in c)
 cart_count = lambda ctx: sum(i["qty"] for i in ctx.user_data.get("cart", []))
 
-async def safe_edit(q, *a, **k):
+async def safe_edit(q, *args, **kwargs):
     try:
-        await q.edit_message_text(*a, **k)
+        if q.message.text:
+            await q.edit_message_text(*args, **kwargs)
+        elif q.message.caption is not None or q.message.photo:
+            await q.edit_message_caption(caption=args[0], reply_markup=kwargs.get("reply_markup"))
+        else:
+            try:
+                await q.message.delete()
+            except Exception:
+                pass
+            await q.message.chat.send_message(*args, **kwargs)
+
     except BadRequest as e:
-        if "not modified" in str(e):
-            return
-        log.error(f"Edit msg error: {e}")
+        err = str(e)
+        if "not modified" in err or "There is no text" in err:
+            return                 # خطاهای بی‌اهمیت را نادیده بگیر
+        log.error(f"Edit msg error: {err}")
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
+        await q.message.chat.send_message(*args, **kwargs)
     except NetworkError as e:
         log.error(f"Network error: {e}")
+
+
 
 async def alert_admin(pid, stock):
     if stock <= LOW_STOCK_TH and ADMIN_ID:
@@ -476,7 +494,7 @@ async def update_stock(cart):
             qty = it["qty"]
             for idx, row in enumerate(records, start=2):
                 if row["id"] == pid:
-                    new = row["stock"] - qty
+                    new = int(row["stock"]) - qty
                     if new < 0:
                         log.error(f"Cannot update stock for {pid}: negative stock")
                         return False
@@ -501,7 +519,7 @@ async def start_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         q = update.callback_query
         if not ctx.user_data.get("dest"):
-            await q.message.reply_text(m("CART_GUIDE") + "\n\n" + fmt_cart(ctx.user_data.get("cart", [])), reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
+            await safe_edit(q, f"{m('CART_GUIDE')}\n\n{fmt_cart(ctx.user_data.get('cart', []))}", reply_markup=kb_cart(ctx.user_data.get("cart", [])), parse_mode="HTML")
             return
         ctx.user_data["name"] = f"{q.from_user.first_name} {(q.from_user.last_name or '')}".strip()
         ctx.user_data["handle"] = f"@{q.from_user.username}" if q.from_user.username else "-"
