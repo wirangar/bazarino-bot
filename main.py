@@ -893,6 +893,32 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         d = q.data
         await q.answer()
 
+
+    elif d == "cart":
+        try:
+            cart = ctx.user_data.get("cart", [])
+            if not cart:
+                await q.message.reply_text("🛒 سبد خرید شما خالی است.")
+                return
+
+            lines = []
+            total = 0
+            for item in cart:
+                name = item.get("name", "نامشخص")
+                qty = item.get("qty", 1)
+                price = item.get("price", 0)
+                total += qty * price
+                lines.append(f"• {name} × {qty} = {qty * price:.2f}€")
+
+            text = "🛒 <b>سبد خرید شما:</b>\n" + "\n".join(lines)
+            text += f"\n\n💰 <b>جمع کل:</b> {total:.2f}€"
+
+            await q.message.reply_text(text, parse_mode="HTML")
+        except Exception as e:
+            log.error(f"Error showing cart: {e}")
+            await q.message.reply_text("❗️مشکل در نمایش سبد خرید.")
+        return
+
         if d == "back":
             await safe_edit(q, m("WELCOME"), reply_markup=await kb_main(ctx), parse_mode="HTML")
             return
@@ -952,29 +978,11 @@ async def router(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if d.startswith("add_"):
             pid = d[4:]
-            try:
-                ok, msg = await add_cart(ctx, pid, qty=1, update=update)
-                await q.answer(msg, show_alert=not ok)
-                cat = (await get_products())[pid]["cat"]
-                try:
-                    await q.message.delete()
-                except Exception as e:
-                    log.warning(f"Delete failed: {e}")
-                await ctx.bot.send_message(
-                    chat_id=q.message.chat.id,
-                    text=EMOJI.get(cat, cat),
-                    reply_markup=await kb_category(cat, ctx),
-                    parse_mode="HTML"
-                )
-                return
-            except Exception as e:
-                log.error(f"Error in add_: {e}")
-                await q.message.reply_text("❗️ خطا در افزودن به سبد خرید.")
-                return
-    except Exception as e:
-        log.error(f"Error in add_: {e}")
-        await q.message.reply_text("❗️ خطا در افزودن به سبد خرید.")
-        return
+            ok, msg = await add_cart(ctx, pid, qty=1, update=update)
+            await q.answer(msg, show_alert=not ok)
+            cat = (await get_products())[pid]["cat"]
+            await safe_edit(q, EMOJI.get(cat, cat), reply_markup=await kb_category(cat, ctx), parse_mode="HTML")
+            return
 
         if d.startswith("back_cat_"):
             cat = d.split("_")[2]
